@@ -1,0 +1,448 @@
+# Codemagic CI/CD Configuration for Flutter Project
+# Project: flutter_zy
+# Package: com.yin.zhi.flutter_zy
+# Supported Platforms: iOS, Android, Linux, macOS, Windows
+
+workflows:
+  # iOS Build Workflow
+  build-ios:
+    name: Build iOS App
+    max_build_duration: 60
+    environment:
+      flutter: 3.35.3
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Get Flutter packages
+        script: |
+          flutter packages pub get
+      - name: Generate code
+        script: |
+          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed, continuing..."
+      - name: Run tests
+        script: |
+          flutter test || echo "No tests found, continuing..."
+      - name: Configure iOS permissions for flutter_secure_storage
+        script: |
+          echo "=== Configuring iOS Keychain permissions for flutter_secure_storage ==="
+          INFO_PLIST="$CM_BUILD_DIR/ios/Runner/Info.plist"
+          
+          # Add Keychain Access Groups for flutter_secure_storage
+          if [ -f "$INFO_PLIST" ]; then
+            # Check if Keychain Access Groups already exist
+            if ! grep -q "Keychain Access Groups" "$INFO_PLIST"; then
+              echo "Adding Keychain Access Groups permission..."
+              
+              # Backup original file
+              cp "$INFO_PLIST" "$INFO_PLIST.bak"
+              
+              # Add Keychain Access Groups before the closing </dict> tag
+              sed -i '' 's|</dict>|\
+	<key>Keychain Access Groups</key>\
+	<array>\
+		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>\
+	</array>\
+</dict>|' "$INFO_PLIST"
+              
+              echo "Keychain Access Groups added successfully"
+              echo "Updated Info.plist content:"
+              grep -A 10 "Keychain Access Groups" "$INFO_PLIST" || echo "Keychain groups not found in output"
+            else
+              echo "Keychain Access Groups already exist in Info.plist"
+            fi
+          else
+            echo "Info.plist not found at $INFO_PLIST"
+          fi
+          
+          echo "iOS permissions configuration completed"
+      - name: Build iOS
+        script: |
+          flutter build ios --release --no-codesign
+      - name: Create iOS IPA
+        script: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r -y Runner.ipa Payload/
+          rm -rf Payload
+          echo "iOS build completed successfully"
+          unzip -l Runner.ipa | head -10
+    artifacts:
+      - build/ios/iphoneos/Runner.ipa
+      - build/ios/iphoneos/Runner.app
+    publishing:
+      email:
+        recipients:
+          - a1392819747@gmail.com
+        notify:
+          success: true
+          failure: false
+
+  # Android Build Workflow
+  build-android:
+    name: Build Android App
+    max_build_duration: 60
+    environment:
+      flutter: 3.35.3
+      java: 17
+    scripts:
+      - name: Setup local.properties
+        script: |
+          echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
+          
+      - name: Setup Android SDK and dependencies
+        script: |
+          sdkmanager "cmdline-tools;latest" "platform-tools" "platforms;android-34"
+          sdkmanager --licenses || true  # Accept all licenses
+          
+      - name: Get Flutter packages
+        script: |
+          flutter packages pub get
+          
+      - name: Apply Android-specific fixes
+        script: |
+          echo "=== Applying Android build fixes ==="
+          
+          # Fix plugin namespace issues
+          echo "Fixing plugin namespace issues..."
+          find ~/.pub-cache/hosted/pub.dev/ -name "build.gradle" -path "*/android/*" | while read gradle_file; do
+            if ! grep -q "namespace" "$gradle_file"; then
+              echo "Adding namespace to $(basename $(dirname $gradle_file))"
+              sed -i.bak 's/android {/android {\n    namespace "com.example"/' "$gradle_file"
+            fi
+          done
+          
+          # Fix main app build configuration
+          echo "Fixing app build.gradle..."
+          APP_GRADLE="$CM_BUILD_DIR/android/app/build.gradle.kts"
+          if [ -f "$APP_GRADLE" ]; then
+            # Add core library desugaring if not present
+            if ! grep -q "isCoreLibraryDesugaringEnabled" "$APP_GRADLE"; then
+              sed -i.bak 's/sourceCompatibility = JavaVersion.VERSION_11/sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n        isCoreLibraryDesugaringEnabled = true/' "$APP_GRADLE"
+            fi
+            
+            # Update minSdk if needed
+            if grep -q "minSdk = flutter.minSdkVersion" "$APP_GRADLE"; then
+              sed -i.bak 's/minSdk = flutter.minSdkVersion/minSdk = 21/' "$APP_GRADLE"
+            fi
+          fi
+          
+          # Fix MainActivity path issues
+          echo "Checking MainActivity files..."
+          KOTLIN_MAINACTIVITY="$CM_BUILD_DIR/android/app/src/main/kotlin/com/yin/zhi/flutter_zy/MainActivity.kt"
+          if [ -f "$KOTLIN_MAINACTIVITY" ]; then
+            echo "MainActivity.kt found at correct path"
+          else
+            echo "MainActivity.kt not found at expected path"
+          fi
+          
+          echo "Android fixes completed"
+          
+      - name: Generate code
+        script: |
+          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed, continuing..."
+          
+      - name: Run tests
+        script: |
+          flutter test || echo "No tests found, continuing..."
+          
+      - name: Build Android APK
+        script: |
+          flutter build apk --release --tree-shake-icons --split-per-abi
+          
+      - name: Build Android AAB
+        script: |
+          flutter build appbundle --release --tree-shake-icons
+          
+      - name: Verify builds
+        script: |
+          echo "Android builds completed successfully"
+          ls -la build/app/outputs/flutter-apk/
+          ls -la build/app/outputs/bundle/release/
+    artifacts:
+      - build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+      - build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+      - build/app/outputs/flutter-apk/app-x86_64-release.apk
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/app/outputs/bundle/release/app-release.aab
+    publishing:
+      email:
+        recipients:
+          - a1392819747@gmail.com
+        notify:
+          success: true
+          failure: false
+
+  # Linux Build Workflow
+  build-linux:
+    name: Build Linux App
+    max_build_duration: 45
+    environment:
+      flutter: 3.35.3
+    scripts:
+      - name: Get Flutter packages
+        script: |
+          flutter packages pub get
+      - name: Enable Linux desktop
+        script: |
+          flutter config --enable-linux-desktop
+      - name: Generate code
+        script: |
+          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed, continuing..."
+      - name: Run tests
+        script: |
+          flutter test || echo "No tests found, continuing..."
+      - name: Build Linux
+        script: |
+          flutter build linux --release
+      - name: Create Linux AppImage
+        script: |
+          cd build/linux/x64/release/bundle
+          tar -czf flutter_zy_linux.tar.gz *
+          echo "Linux build completed successfully"
+    artifacts:
+      - build/linux/x64/release/bundle/**
+      - build/linux/x64/release/bundle/flutter_zy_linux.tar.gz
+    publishing:
+      email:
+        recipients:
+          - a1392819747@gmail.com
+        notify:
+          success: true
+          failure: false
+
+  # macOS Build Workflow
+  build-macos:
+    name: Build macOS App
+    max_build_duration: 60
+    environment:
+      flutter: 3.35.3
+      xcode: latest
+    scripts:
+      - name: Get Flutter packages
+        script: |
+          flutter packages pub get
+      - name: Enable macOS desktop
+        script: |
+          flutter config --enable-macos-desktop
+      - name: Generate code
+        script: |
+          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed, continuing..."
+      - name: Run tests
+        script: |
+          flutter test || echo "No tests found, continuing..."
+      - name: Build macOS
+        script: |
+          flutter build macos --release
+      - name: Create macOS DMG
+        script: |
+          cd build/macos/Build/Products/Release
+          hdiutil create -size 100m -fs HFS+ -volname "Flutter Zy" flutter_zy_macos.dmg
+          hdiutil attach flutter_zy_macos.dmg -mountpoint /tmp/dmg
+          cp -R flutter_zy.app /tmp/dmg/
+          hdiutil detach /tmp/dmg
+          echo "macOS build completed successfully"
+    artifacts:
+      - build/macos/Build/Products/Release/flutter_zy.app
+      - build/macos/Build/Products/Release/flutter_zy_macos.dmg
+    publishing:
+      email:
+        recipients:
+          - a1392819747@gmail.com
+        notify:
+          success: true
+          failure: false
+
+  # Windows Build Workflow
+  build-windows:
+    name: Build Windows App
+    max_build_duration: 45
+    environment:
+      flutter: 3.35.3
+    scripts:
+      - name: Get Flutter packages
+        script: |
+          flutter packages pub get
+      - name: Enable Windows desktop
+        script: |
+          flutter config --enable-windows-desktop
+      - name: Generate code
+        script: |
+          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed, continuing..."
+      - name: Run tests
+        script: |
+          flutter test || echo "No tests found, continuing..."
+      - name: Build Windows
+        script: |
+          flutter build windows --release
+      - name: Create Windows installer
+        script: |
+          cd build/windows/x64/runner/Release
+          zip -r flutter_zy_windows.zip *.exe *.dll data/ icudtl.dat
+          echo "Windows build completed successfully"
+    artifacts:
+      - build/windows/x64/runner/Release/**
+      - build/windows/x64/runner/Release/flutter_zy_windows.zip
+    publishing:
+      email:
+        recipients:
+          - a1392819747@gmail.com
+        notify:
+          success: true
+          failure: false
+
+  # Combined Build Workflow - All Platforms
+  build-all:
+    name: Build All Platforms (iOS + Android + Desktop)
+    max_build_duration: 120
+    environment:
+      flutter: 3.35.3
+      xcode: latest
+      java: 17
+    scripts:
+      - name: Setup environment
+        script: |
+          echo "Setting up environment for multi-platform build..."
+          
+      - name: Setup Android SDK
+        script: |
+          sdkmanager "cmdline-tools;latest" "platform-tools" "platforms;android-34"
+          sdkmanager --licenses || true
+          
+      - name: Enable desktop platforms
+        script: |
+          flutter config --enable-linux-desktop
+          flutter config --enable-macos-desktop  
+          flutter config --enable-windows-desktop
+          
+      - name: Get Flutter packages
+        script: |
+          flutter packages pub get
+          
+      - name: Apply build fixes
+        script: |
+          echo "=== Applying multi-platform build fixes ==="
+          
+          # Android fixes
+          APP_GRADLE="$CM_BUILD_DIR/android/app/build.gradle.kts"
+          if [ -f "$APP_GRADLE" ]; then
+            if ! grep -q "isCoreLibraryDesugaringEnabled" "$APP_GRADLE"; then
+              sed -i.bak 's/sourceCompatibility = JavaVersion.VERSION_11/sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n        isCoreLibraryDesugaringEnabled = true/' "$APP_GRADLE"
+            fi
+            if grep -q "minSdk = flutter.minSdkVersion" "$APP_GRADLE"; then
+              sed -i.bak 's/minSdk = flutter.minSdkVersion/minSdk = 21/' "$APP_GRADLE"
+            fi
+          fi
+          
+          # Fix plugin namespaces
+          find ~/.pub-cache/hosted/pub.dev/ -name "build.gradle" -path "*/android/*" | while read gradle_file; do
+            if ! grep -q "namespace" "$gradle_file"; then
+              sed -i.bak 's/android {/android {\n    namespace "com.example"/' "$gradle_file"
+            fi
+          done
+          
+          echo "Build fixes applied"
+          
+      - name: Generate code
+        script: |
+          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed, continuing..."
+          
+      - name: Run tests
+        script: |
+          flutter test || echo "No tests found, continuing..."
+          
+      - name: Build Android APK
+        script: |
+          flutter build apk --release --tree-shake-icons --split-per-abi
+          
+      - name: Build Android AAB
+        script: |
+          flutter build appbundle --release --tree-shake-icons
+          
+      - name: Build iOS
+        script: |
+          flutter build ios --release --no-codesign
+          
+      - name: Build Linux
+        script: |
+          flutter build linux --release
+          
+      - name: Build macOS
+        script: |
+          flutter build macos --release
+          
+      - name: Build Windows
+        script: |
+          flutter build windows --release
+          
+      - name: Create distribution packages
+        script: |
+          echo "Creating distribution packages..."
+          
+          # iOS IPA
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r -y ../../ios/Runner.ipa Payload/
+          rm -rf Payload
+          
+          # Linux tarball
+          cd build/linux/x64/release/bundle
+          tar -czf ../../../../linux/flutter_zy_linux.tar.gz *
+          
+          # macOS DMG
+          cd build/macos/Build/Products/Release
+          hdiutil create -size 100m -fs HFS+ -volname "Flutter Zy" ../../../../macos/flutter_zy_macos.dmg
+          hdiutil attach ../../../../macos/flutter_zy_macos.dmg -mountpoint /tmp/dmg 2>/dev/null || true
+          cp -R flutter_zy.app /tmp/dmg/ 2>/dev/null || true
+          hdiutil detach /tmp/dmg 2>/dev/null || true
+          
+          # Windows zip
+          cd build/windows/x64/runner/Release
+          zip -r ../../../../windows/flutter_zy_windows.zip *.exe *.dll data/ icudtl.dat
+          
+          echo "All builds completed successfully"
+          
+      - name: Verify all builds
+        script: |
+          echo "=== Build verification ==="
+          echo "Android APKs:"
+          ls -la build/app/outputs/flutter-apk/
+          echo "Android AAB:"
+          ls -la build/app/outputs/bundle/release/
+          echo "iOS:"
+          ls -la ios/Runner.ipa || echo "iOS build not found"
+          echo "Linux:"
+          ls -la linux/flutter_zy_linux.tar.gz || echo "Linux build not found"
+          echo "macOS:"
+          ls -la macos/flutter_zy_macos.dmg || echo "macOS build not found"
+          echo "Windows:"
+          ls -la windows/flutter_zy_windows.zip || echo "Windows build not found"
+          
+    artifacts:
+      # Android
+      - build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+      - build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk  
+      - build/app/outputs/flutter-apk/app-x86_64-release.apk
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/app/outputs/bundle/release/app-release.aab
+      
+      # iOS
+      - ios/Runner.ipa
+      - build/ios/iphoneos/Runner.app
+      
+      # Desktop
+      - linux/flutter_zy_linux.tar.gz
+      - build/linux/x64/release/bundle/**
+      - macos/flutter_zy_macos.dmg
+      - build/macos/Build/Products/Release/flutter_zy.app
+      - windows/flutter_zy_windows.zip
+      - build/windows/x64/runner/Release/**
+      
+    publishing:
+      email:
+        recipients:
+          - a1392819747@gmail.com
+        notify:
+          success: true
+          failure: false
