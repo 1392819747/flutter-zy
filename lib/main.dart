@@ -1,122 +1,692 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const AppleIconSortApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class AppleIconSortApp extends StatelessWidget {
+  const AppleIconSortApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      debugShowCheckedModeBanner: false,
+      title: 'Apple Icon Sort',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF158A80)),
+        useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const AppleIconSortPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class AppleIconSortPage extends StatefulWidget {
+  const AppleIconSortPage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<AppleIconSortPage> createState() => _AppleIconSortPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _AppleIconSortPageState extends State<AppleIconSortPage> {
+  static const double _gridSpacing = 24;
+  static const double _maxContentWidth = 760;
 
-  void _incrementCounter() {
+  final List<AppIconData> _icons = List.of(_defaultIcons);
+  bool _isEditing = false;
+  AppIconData? _draggingIcon;
+  int? _dragStartIndex;
+  int? _hoverSlot;
+
+  void _handleDragStart(int index) {
+    final AppIconData icon = _icons[index];
+    HapticFeedback.heavyImpact();
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _isEditing = true;
+      _draggingIcon = icon;
+      _dragStartIndex = index;
+      _hoverSlot = index;
     });
+  }
+
+  void _handleDragEnd({required bool wasAccepted}) {
+    setState(() {
+      if (!wasAccepted && _draggingIcon != null && _dragStartIndex != null) {
+        final AppIconData icon = _draggingIcon!;
+        final int currentIndex = _icons.indexOf(icon);
+        if (currentIndex != -1) {
+          final AppIconData item = _icons.removeAt(currentIndex);
+          final int restoredIndex = math.max(0, math.min(_dragStartIndex!, _icons.length));
+          _icons.insert(restoredIndex, item);
+        }
+      }
+      _draggingIcon = null;
+      _dragStartIndex = null;
+      _hoverSlot = null;
+    });
+  }
+
+  void _handleDelete(AppIconData icon) {
+    setState(() {
+      _icons.remove(icon);
+      if (_icons.isEmpty) {
+        _isEditing = false;
+      }
+      if (identical(_draggingIcon, icon)) {
+        _draggingIcon = null;
+        _hoverSlot = null;
+        _dragStartIndex = null;
+      }
+    });
+  }
+
+  void _handleDonePressed() {
+    setState(() {
+      _isEditing = false;
+      _draggingIcon = null;
+      _hoverSlot = null;
+      _dragStartIndex = null;
+    });
+  }
+
+  int _columnCountForWidth(double width) {
+    if (width >= 720) {
+      return 4;
+    }
+    if (width >= 520) {
+      return 3;
+    }
+    return 2;
+  }
+
+  void _updateDragPosition(AppIconData icon, int slot) {
+    final int currentIndex = _icons.indexOf(icon);
+    if (currentIndex == -1) {
+      return;
+    }
+
+    int desiredIndex = slot;
+    if (currentIndex < slot) {
+      desiredIndex -= 1;
+    }
+    if (_icons.isEmpty) {
+      desiredIndex = 0;
+    } else {
+      desiredIndex = math.max(0, math.min(desiredIndex, _icons.length - 1));
+    }
+
+    if (desiredIndex == currentIndex) {
+      if (_hoverSlot != slot) {
+        setState(() {
+          _hoverSlot = slot;
+        });
+      }
+      return;
+    }
+
+    setState(() {
+      final AppIconData item = _icons.removeAt(currentIndex);
+      int insertIndex = slot;
+      if (currentIndex < slot) {
+        insertIndex -= 1;
+      }
+      insertIndex = math.max(0, math.min(insertIndex, _icons.length));
+      _icons.insert(insertIndex, item);
+      _hoverSlot = slot;
+    });
+  }
+
+  Widget _buildDraggableIcon({
+    required int index,
+    required double itemWidth,
+  }) {
+    final AppIconData icon = _icons[index];
+    final bool isDragging = identical(_draggingIcon, icon);
+    final bool isHighlighted = _hoverSlot == index && _draggingIcon != null;
+
+    return DragTarget<AppIconData>(
+      onWillAccept: (from) => from != null,
+      onMove: (details) {
+        if (details.data != null && !identical(details.data, icon)) {
+          _updateDragPosition(details.data, index);
+        } else if (_hoverSlot != index) {
+          setState(() {
+            _hoverSlot = index;
+          });
+        }
+      },
+      onLeave: (_) {
+        if (_hoverSlot == index && _draggingIcon != null) {
+          setState(() {
+            _hoverSlot = null;
+          });
+        }
+      },
+      onAccept: (_) {
+        setState(() {
+          _hoverSlot = index;
+        });
+      },
+      builder: (context, candidateData, rejectedData) {
+        final bool showHighlight = isHighlighted || candidateData.isNotEmpty;
+        return LongPressDraggable<AppIconData>(
+          data: icon,
+          dragAnchorStrategy: pointerDragAnchorStrategy,
+          feedback: _DragFeedback(icon: icon, size: itemWidth),
+          onDragStarted: () => _handleDragStart(index),
+          onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
+          childWhenDragging: _DropPlaceholder(
+            size: itemWidth,
+            isActive: showHighlight,
+            isVisible: true,
+          ),
+          child: AppleIconTile(
+            key: ValueKey(icon.label),
+            icon: icon,
+            isActive: isDragging,
+            isEditing: _isEditing,
+            isHighlighted: showHighlight,
+            onDelete: () => _handleDelete(icon),
+            size: itemWidth,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTrailingDropTarget(double itemWidth) {
+    final bool isActive = _hoverSlot == _icons.length && _draggingIcon != null;
+    return SizedBox(
+      width: itemWidth,
+      child: DragTarget<AppIconData>(
+        onWillAccept: (data) => data != null,
+        onMove: (details) {
+          if (details.data != null) {
+            _updateDragPosition(details.data, _icons.length);
+          }
+        },
+        onLeave: (_) {
+          if (_hoverSlot == _icons.length && _draggingIcon != null) {
+            setState(() {
+              _hoverSlot = null;
+            });
+          }
+        },
+        onAccept: (_) {
+          setState(() {
+            _hoverSlot = _icons.length;
+          });
+        },
+        builder: (context, candidateData, rejectedData) {
+          final bool shouldShow = _draggingIcon != null || candidateData.isNotEmpty;
+          return _DropPlaceholder(
+            size: itemWidth,
+            isActive: isActive || candidateData.isNotEmpty,
+            isVisible: shouldShow,
+          );
+        },
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      backgroundColor: Colors.transparent,
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF158A80),
+              Color(0xFF072F2C),
+              Color(0xFF010C0B),
+            ],
+            stops: [0, 0.5, 1],
+          ),
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Colors.white.withOpacity(0.05),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment.center,
+                    radius: 0.9,
+                    colors: [
+                      const Color(0xFF158A80).withOpacity(0.08),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            SafeArea(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: _maxContentWidth),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 30),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 200),
+                              child: _isEditing
+                                  ? _DoneButton(onPressed: _handleDonePressed)
+                                  : const SizedBox.shrink(),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final double width = constraints.maxWidth;
+                              final int columns = _columnCountForWidth(width);
+                              final double itemWidth =
+                                  (width - _gridSpacing * (columns - 1)) / columns;
+
+                              return SingleChildScrollView(
+                                child: Wrap(
+                                  spacing: _gridSpacing,
+                                  runSpacing: _gridSpacing,
+                                  children: [
+                                    for (int i = 0; i < _icons.length; i++)
+                                      SizedBox(
+                                        width: itemWidth,
+                                        child: _buildDraggableIcon(
+                                          index: i,
+                                          itemWidth: itemWidth,
+                                        ),
+                                      ),
+                                    if (_draggingIcon != null)
+                                      SizedBox(
+                                        width: itemWidth,
+                                        child: _buildTrailingDropTarget(itemWidth),
+                                      ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
+
+class AppIconData {
+  const AppIconData({required this.assetPath, required this.label});
+
+  final String assetPath;
+  final String label;
+}
+
+class AppleIconTile extends StatefulWidget {
+  const AppleIconTile({
+    super.key,
+    required this.icon,
+    required this.isEditing,
+    required this.onDelete,
+    required this.size,
+    required this.isActive,
+    required this.isHighlighted,
+  });
+
+  final AppIconData icon;
+  final bool isEditing;
+  final VoidCallback onDelete;
+  final double size;
+  final bool isActive;
+  final bool isHighlighted;
+
+  @override
+  State<AppleIconTile> createState() => _AppleIconTileState();
+}
+
+class _AppleIconTileState extends State<AppleIconTile>
+    with SingleTickerProviderStateMixin {
+  static const double _maxAngle = 2 * math.pi / 180;
+  static const Duration _shakeDuration = Duration(milliseconds: 150);
+
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: _shakeDuration,
+    lowerBound: -_maxAngle,
+    upperBound: _maxAngle,
+  );
+  Timer? _startDelayTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isEditing) {
+      _startShaking();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AppleIconTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isEditing && !_controller.isAnimating) {
+      _startShaking();
+    } else if (!widget.isEditing && _controller.isAnimating) {
+      _stopShaking();
+    }
+  }
+
+  void _startShaking() {
+    _startDelayTimer?.cancel();
+    _startDelayTimer = Timer(
+      Duration(milliseconds: 80 + math.Random().nextInt(220)),
+      () {
+        if (!mounted || !widget.isEditing) {
+          return;
+        }
+        _controller.repeat(min: -_maxAngle, max: _maxAngle, reverse: true);
+      },
+    );
+  }
+
+  void _stopShaking() {
+    _startDelayTimer?.cancel();
+    _controller.animateTo(
+      0,
+      duration: _shakeDuration,
+      curve: Curves.easeInOut,
+    ).whenComplete(() {
+      if (mounted) {
+        _controller.stop();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _startDelayTimer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final double angle = widget.isEditing ? _controller.value : 0;
+        return Transform.rotate(
+          angle: angle,
+          child: child,
+        );
+      },
+      child: SizedBox(
+        width: widget.size,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            AppleIconBody(
+              icon: widget.icon,
+              isHighlighted: widget.isHighlighted,
+              size: widget.size,
+            ),
+            Positioned(
+              top: -12,
+              left: -12,
+              child: IgnorePointer(
+                ignoring: !widget.isEditing || widget.isActive,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 150),
+                  opacity: widget.isEditing && !widget.isActive ? 1 : 0,
+                  child: _DeleteButton(onPressed: widget.onDelete),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AppleIconBody extends StatelessWidget {
+  const AppleIconBody({
+    super.key,
+    required this.icon,
+    required this.size,
+    required this.isHighlighted,
+  });
+
+  final AppIconData icon;
+  final double size;
+  final bool isHighlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    final double radius = size * 0.3;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(radius),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.18),
+                blurRadius: 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+            border: isHighlighted
+                ? Border.all(color: Colors.white.withOpacity(0.7), width: 2)
+                : null,
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(radius),
+            child: AspectRatio(
+              aspectRatio: 1,
+              child: Container(
+                color: Colors.white,
+                alignment: Alignment.center,
+                child: Image.asset(
+                  icon.assetPath,
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          icon.label,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            shadows: [
+              Shadow(
+                color: Colors.black54,
+                offset: Offset(0, 1),
+                blurRadius: 5,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DropPlaceholder extends StatelessWidget {
+  const _DropPlaceholder({
+    required this.size,
+    required this.isActive,
+    required this.isVisible,
+  });
+
+  final double size;
+  final bool isActive;
+  final bool isVisible;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isVisible) {
+      return const SizedBox.shrink();
+    }
+
+    final double radius = size * 0.3;
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 150),
+      opacity: isActive ? 1 : 0.75,
+      child: SizedBox(
+        height: size + 40,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(
+              color: Colors.white.withOpacity(isActive ? 0.8 : 0.4),
+              width: 2,
+            ),
+            color: Colors.white.withOpacity(0.08),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DeleteButton extends StatelessWidget {
+  const _DeleteButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        width: 26,
+        height: 26,
+        decoration: BoxDecoration(
+          color: const Color.fromRGBO(180, 180, 180, 0.8),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        alignment: Alignment.center,
+        child: const Text(
+          '-',
+          style: TextStyle(
+            fontSize: 28,
+            height: 0.9,
+            color: Colors.black,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DoneButton extends StatelessWidget {
+  const _DoneButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton(
+      key: const ValueKey('done_button'),
+      style: TextButton.styleFrom(
+        backgroundColor: const Color.fromRGBO(180, 180, 180, 0.6),
+        foregroundColor: Colors.black,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        shape: const StadiumBorder(),
+        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+      ),
+      onPressed: onPressed,
+      child: const Text('Done'),
+    );
+  }
+}
+
+class _DragFeedback extends StatelessWidget {
+  const _DragFeedback({required this.icon, required this.size});
+
+  final AppIconData icon;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Transform.scale(
+        scale: 1.05,
+        child: SizedBox(
+          width: size,
+          child: AppleIconBody(
+            icon: icon,
+            isHighlighted: true,
+            size: size,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+const List<AppIconData> _defaultIcons = [
+  AppIconData(assetPath: 'assets/icons/amazon.png', label: 'Amazon'),
+  AppIconData(assetPath: 'assets/icons/dropbox.png', label: 'Dropbox'),
+  AppIconData(assetPath: 'assets/icons/facebook.png', label: 'Facebook'),
+  AppIconData(assetPath: 'assets/icons/gmail.png', label: 'Gmail'),
+  AppIconData(assetPath: 'assets/icons/github.png', label: 'GitHub'),
+  AppIconData(assetPath: 'assets/icons/google.png', label: 'Google'),
+  AppIconData(assetPath: 'assets/icons/google-drive.png', label: 'Drive'),
+  AppIconData(assetPath: 'assets/icons/instagram.png', label: 'Instagram'),
+  AppIconData(assetPath: 'assets/icons/linkedin.png', label: 'LinkedIn'),
+  AppIconData(assetPath: 'assets/icons/messenger.png', label: 'Messenger'),
+  AppIconData(assetPath: 'assets/icons/paypal.png', label: 'PayPal'),
+  AppIconData(assetPath: 'assets/icons/pinterest.png', label: 'Pinterest'),
+  AppIconData(assetPath: 'assets/icons/reddit.png', label: 'Reddit'),
+  AppIconData(assetPath: 'assets/icons/skype.png', label: 'Skype'),
+  AppIconData(assetPath: 'assets/icons/spotify.png', label: 'Spotify'),
+  AppIconData(assetPath: 'assets/icons/telegram.png', label: 'Telegram'),
+  AppIconData(assetPath: 'assets/icons/twitter.png', label: 'Twitter'),
+  AppIconData(assetPath: 'assets/icons/whatsapp.png', label: 'WhatsApp'),
+  AppIconData(assetPath: 'assets/icons/youtube.png', label: 'YouTube'),
+];
