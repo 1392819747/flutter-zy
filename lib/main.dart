@@ -33,7 +33,8 @@ class AppleIconSortPage extends StatefulWidget {
 }
 
 class _AppleIconSortPageState extends State<AppleIconSortPage> {
-  static const double _gridSpacing = 24;
+  static const double _gridSpacing = 26;
+  static const double _runSpacing = 32;
   static const double _maxContentWidth = 760;
 
   final List<AppIconData> _icons = List.of(_defaultIcons);
@@ -94,13 +95,19 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   }
 
   int _columnCountForWidth(double width) {
-    if (width >= 720) {
+    if (width >= 1100) {
+      return 6;
+    }
+    if (width >= 900) {
+      return 5;
+    }
+    if (width >= 600) {
       return 4;
     }
-    if (width >= 520) {
-      return 3;
+    if (width >= 360) {
+      return 4;
     }
-    return 2;
+    return 3;
   }
 
   void _updateDragPosition(AppIconData icon, int slot) {
@@ -285,10 +292,12 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: _maxContentWidth),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 30),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        const _StatusBar(),
+                        const SizedBox(height: 28),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
@@ -296,11 +305,11 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                               duration: const Duration(milliseconds: 200),
                               child: _isEditing
                                   ? _DoneButton(onPressed: _handleDonePressed)
-                                  : const SizedBox.shrink(),
+                                  : const SizedBox(width: 62),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 12),
                         Expanded(
                           child: LayoutBuilder(
                             builder: (context, constraints) {
@@ -309,26 +318,40 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                               final double itemWidth =
                                   (width - _gridSpacing * (columns - 1)) / columns;
 
-                              return SingleChildScrollView(
-                                child: Wrap(
-                                  spacing: _gridSpacing,
-                                  runSpacing: _gridSpacing,
-                                  children: [
-                                    for (int i = 0; i < _icons.length; i++)
-                                      SizedBox(
-                                        width: itemWidth,
-                                        child: _buildDraggableIcon(
-                                          index: i,
-                                          itemWidth: itemWidth,
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(
+                                    child: SingleChildScrollView(
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(bottom: 24),
+                                        child: Wrap(
+                                          spacing: _gridSpacing,
+                                          runSpacing: _runSpacing,
+                                          alignment: WrapAlignment.start,
+                                          runAlignment: WrapAlignment.start,
+                                          children: [
+                                            for (int i = 0; i < _icons.length; i++)
+                                              SizedBox(
+                                                width: itemWidth,
+                                                child: _buildDraggableIcon(
+                                                  index: i,
+                                                  itemWidth: itemWidth,
+                                                ),
+                                              ),
+                                            if (_draggingIcon != null)
+                                              SizedBox(
+                                                width: itemWidth,
+                                                child: _buildTrailingDropTarget(itemWidth),
+                                              ),
+                                          ],
                                         ),
                                       ),
-                                    if (_draggingIcon != null)
-                                      SizedBox(
-                                        width: itemWidth,
-                                        child: _buildTrailingDropTarget(itemWidth),
-                                      ),
-                                  ],
-                                ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const _HomeIndicator(),
+                                ],
                               );
                             },
                           ),
@@ -663,6 +686,228 @@ class _DragFeedback extends StatelessWidget {
             isHighlighted: true,
             size: size,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusBar extends StatefulWidget {
+  const _StatusBar();
+
+  @override
+  State<_StatusBar> createState() => _StatusBarState();
+}
+
+class _StatusBarState extends State<_StatusBar> {
+  late DateTime _now;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _now = DateTime.now();
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) {
+      setState(() {
+        _now = DateTime.now();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String _formatTime() {
+    final TimeOfDay timeOfDay = TimeOfDay.fromDateTime(_now);
+    final String hour = timeOfDay.hour.toString().padLeft(2, '0');
+    final String minute = timeOfDay.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Text(
+          _formatTime(),
+          style: const TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+            letterSpacing: -0.5,
+          ),
+        ),
+        const Spacer(),
+        const _SignalStrengthIcon(),
+        const SizedBox(width: 6),
+        const _WifiIcon(),
+        const SizedBox(width: 6),
+        const _BatteryIcon(),
+      ],
+    );
+  }
+}
+
+class _SignalStrengthIcon extends StatelessWidget {
+  const _SignalStrengthIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 22,
+      height: 12,
+      child: CustomPaint(
+        painter: _SignalStrengthPainter(),
+      ),
+    );
+  }
+}
+
+class _SignalStrengthPainter extends CustomPainter {
+  const _SignalStrengthPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    final double barWidth = size.width / 9;
+    final double gap = barWidth * 0.9;
+    for (int i = 0; i < 4; i++) {
+      final double heightFactor = (i + 1) / 4;
+      final double barHeight = size.height * heightFactor;
+      final double dx = i * (barWidth + gap);
+      final Rect rect = Rect.fromLTWH(
+        dx,
+        size.height - barHeight,
+        barWidth,
+        barHeight,
+      );
+      final RRect rRect = RRect.fromRectAndRadius(rect, const Radius.circular(1.5));
+      canvas.drawRRect(rRect, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _WifiIcon extends StatelessWidget {
+  const _WifiIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 18,
+      height: 12,
+      child: CustomPaint(
+        painter: _WifiPainter(),
+      ),
+    );
+  }
+}
+
+class _WifiPainter extends CustomPainter {
+  const _WifiPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4
+      ..strokeCap = StrokeCap.round;
+
+    final Offset center = Offset(size.width / 2, size.height);
+    for (int i = 0; i < 3; i++) {
+      final double factor = (i + 1) / 3;
+      final double radius = size.width / 2 * factor;
+      final Rect rect = Rect.fromCircle(center: center, radius: radius);
+      final Path path = Path()
+        ..addArc(rect, math.pi, math.pi);
+      canvas.drawPath(path, paint);
+    }
+
+    final Paint dotPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, 1.6, dotPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _BatteryIcon extends StatelessWidget {
+  const _BatteryIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 26,
+      height: 12,
+      child: CustomPaint(
+        painter: _BatteryPainter(),
+      ),
+    );
+  }
+}
+
+class _BatteryPainter extends CustomPainter {
+  const _BatteryPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double bodyWidth = size.width - 3;
+    final Rect bodyRect = Rect.fromLTWH(0, 0, bodyWidth, size.height);
+    final RRect body = RRect.fromRectAndRadius(bodyRect, const Radius.circular(2.5));
+
+    final Paint outlinePaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+    canvas.drawRRect(body, outlinePaint);
+
+    final double levelPadding = 2.2;
+    final Rect levelRect = Rect.fromLTWH(
+      levelPadding,
+      levelPadding,
+      bodyWidth - levelPadding * 2,
+      size.height - levelPadding * 2,
+    );
+    final RRect level = RRect.fromRectAndRadius(levelRect, const Radius.circular(1.6));
+    final Paint levelPaint = Paint()
+      ..shader = const LinearGradient(
+        colors: [Color(0xFF4CD964), Color(0xFF2ECC71)],
+      ).createShader(levelRect);
+    canvas.drawRRect(level, levelPaint);
+
+    final Rect capRect = Rect.fromLTWH(bodyWidth + 0.6, size.height / 2 - 2, 2.4, 4);
+    final RRect cap = RRect.fromRectAndRadius(capRect, const Radius.circular(1));
+    final Paint capPaint = Paint()..color = Colors.white;
+    canvas.drawRRect(cap, capPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _HomeIndicator extends StatelessWidget {
+  const _HomeIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        width: 134,
+        height: 5,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.55),
+          borderRadius: BorderRadius.circular(3),
         ),
       ),
     );
