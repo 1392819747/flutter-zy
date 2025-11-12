@@ -9,8 +9,15 @@ workflows:
     scripts:
       - name: Get Flutter packages
         script: flutter packages pub get
-      - name: Install CocoaPods dependencies
-        script: cd ios && pod install
+      - name: Check iOS dependencies
+        script: |
+          echo "Checking iOS project configuration..."
+          if [ -f "ios/Podfile" ]; then
+            echo "Podfile found, installing dependencies..."
+            cd ios && pod install
+          else
+            echo "No Podfile found, skipping CocoaPods installation"
+          fi
       - name: Generate code
         script: flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
       - name: Run tests
@@ -220,7 +227,13 @@ workflows:
       - name: Run tests
         script: flutter test || echo "No tests found"
       - name: Setup iOS build
-        script: cd ios && pod install || true
+        script: |
+          echo "Setting up iOS build..."
+          if [ -f "ios/Podfile" ]; then
+            cd ios && pod install || true
+          else
+            echo "No Podfile found, skipping CocoaPods installation"
+          fi
       - name: Setup Android build
         script: |
           echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
