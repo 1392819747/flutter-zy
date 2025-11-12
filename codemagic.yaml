@@ -1,78 +1,38 @@
-# Flutter Multi-Platform Build Configuration
-# Supports iOS, Android, Linux, macOS, and Windows builds
-
 workflows:
-  # iOS Build Workflow
   build-ios:
     name: Build iOS App
     max_build_duration: 60
     environment:
-      flutter: 3.35.3
+      flutter: "3.35.3"
       xcode: latest
       cocoapods: default
     scripts:
       - name: Get Flutter packages
-        script: |
-          flutter packages pub get
-          
+        script: flutter packages pub get
       - name: Install CocoaPods dependencies
-        script: |
-          cd ios && pod install || echo "Pod install completed with warnings"
-          
+        script: cd ios && pod install
       - name: Generate code
-        script: |
-          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
-          
+        script: flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
       - name: Run tests
-        script: |
-          flutter test || echo "No tests found"
-          
+        script: flutter test || echo "No tests found"
       - name: Configure iOS permissions for flutter_secure_storage
         script: |
           echo "Configuring iOS Keychain permissions..."
           INFO_PLIST="$CM_BUILD_DIR/ios/Runner/Info.plist"
-          
           if [ -f "$INFO_PLIST" ]; then
             if ! grep -q "Keychain Access Groups" "$INFO_PLIST"; then
               cp "$INFO_PLIST" "$INFO_PLIST.bak"
-              
-              # Create temporary script to add Keychain Access Groups
-              cat > /tmp/add_keychain.py << 'EOF'
-import plistlib
-import sys
-
-try:
-    with open(sys.argv[1], 'rb') as f:
-        plist = plistlib.load(f)
-    
-    # Add Keychain Access Groups if not exists
-    if 'Keychain Access Groups' not in plist:
-        bundle_id = plist.get('CFBundleIdentifier', 'com.example.app')
-        app_id_prefix = 'ABCDEFGHIJ.'  # Default, will be replaced by Xcode
-        plist['Keychain Access Groups'] = [f'{app_id_prefix}{bundle_id}']
-    
-    with open(sys.argv[1], 'wb') as f:
-        plistlib.dump(plist, f)
-    
-    print("Keychain Access Groups added successfully")
-except Exception as e:
-    print(f"Error: {e}")
-    sys.exit(1)
-EOF
-              
-              python3 /tmp/add_keychain.py "$INFO_PLIST"
-              echo "iOS permissions configured"
+              /usr/libexec/PlistBuddy -c "Add :Keychain Access Groups array" "$INFO_PLIST" || true
+              /usr/libexec/PlistBuddy -c "Add :Keychain Access Groups:0 string $(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)" "$INFO_PLIST" || true
+              echo "Keychain Access Groups added successfully"
             else
               echo "Keychain Access Groups already exist"
             fi
           else
             echo "Info.plist not found"
           fi
-          
       - name: Build iOS
-        script: |
-          flutter build ios --release --no-codesign
-          
+        script: flutter build ios --release --no-codesign
       - name: Create iOS IPA
         script: |
           cd build/ios/iphoneos
@@ -81,11 +41,9 @@ EOF
           zip -r -y Runner.ipa Payload/
           rm -rf Payload
           echo "iOS build completed"
-          
     artifacts:
       - build/ios/iphoneos/Runner.ipa
       - build/ios/iphoneos/Runner.app
-      
     publishing:
       email:
         recipients:
@@ -94,68 +52,43 @@ EOF
           success: true
           failure: false
 
-  # Android Build Workflow
   build-android:
     name: Build Android App
     max_build_duration: 60
     environment:
-      flutter: 3.35.3
+      flutter: "3.35.3"
       java: 17
     scripts:
       - name: Setup local.properties
-        script: |
-          echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
-          
+        script: echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
       - name: Setup Android SDK
         script: |
           sdkmanager "platform-tools" "platforms;android-34"
           sdkmanager --licenses < /dev/null || true
-          
       - name: Get Flutter packages
-        script: |
-          flutter packages pub get
-          
+        script: flutter packages pub get
       - name: Apply Android fixes
         script: |
           echo "Applying Android build fixes..."
-          
-          # Fix plugin namespaces
-          find ~/.pub-cache/hosted/ -name "build.gradle" -path "*/android/*" -exec grep -L "namespace" {} \; | while read file; do
-            echo "Fixing namespace in $(basename $(dirname $file))"
-            sed -i.bak 's/android {/android {\n        namespace "com.example"/' "$file"
-          done
-          
-          # Fix app build configuration
           APP_GRADLE="$CM_BUILD_DIR/android/app/build.gradle.kts"
           if [ -f "$APP_GRADLE" ]; then
             sed -i.bak 's/minSdk = flutter.minSdkVersion/minSdk = 21/' "$APP_GRADLE"
           fi
-          
           echo "Android fixes completed"
-          
       - name: Generate code
-        script: |
-          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
-          
+        script: flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
       - name: Run tests
-        script: |
-          flutter test || echo "No tests found"
-          
+        script: flutter test || echo "No tests found"
       - name: Build Android APK
-        script: |
-          flutter build apk --release --tree-shake-icons --split-per-abi
-          
+        script: flutter build apk --release --tree-shake-icons --split-per-abi
       - name: Build Android AAB
-        script: |
-          flutter build appbundle --release --tree-shake-icons
-          
+        script: flutter build appbundle --release --tree-shake-icons
     artifacts:
       - build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
       - build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
       - build/app/outputs/flutter-apk/app-x86_64-release.apk
       - build/app/outputs/flutter-apk/app-release.apk
       - build/app/outputs/bundle/release/app-release.aab
-      
     publishing:
       email:
         recipients:
@@ -164,43 +97,30 @@ EOF
           success: true
           failure: false
 
-  # Linux Build Workflow
   build-linux:
     name: Build Linux App
     max_build_duration: 45
     environment:
-      flutter: 3.35.3
+      flutter: "3.35.3"
     scripts:
       - name: Get Flutter packages
-        script: |
-          flutter packages pub get
-          
+        script: flutter packages pub get
       - name: Enable Linux desktop
-        script: |
-          flutter config --enable-linux-desktop
-          
+        script: flutter config --enable-linux-desktop
       - name: Generate code
-        script: |
-          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
-          
+        script: flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
       - name: Run tests
-        script: |
-          flutter test || echo "No tests found"
-          
+        script: flutter test || echo "No tests found"
       - name: Build Linux
-        script: |
-          flutter build linux --release
-          
+        script: flutter build linux --release
       - name: Create Linux package
         script: |
           cd build/linux/x64/release/bundle
           tar -czf flutter_zy_linux.tar.gz *
           echo "Linux build completed"
-          
     artifacts:
       - build/linux/x64/release/bundle/**
       - build/linux/x64/release/bundle/flutter_zy_linux.tar.gz
-      
     publishing:
       email:
         recipients:
@@ -209,44 +129,31 @@ EOF
           success: true
           failure: false
 
-  # macOS Build Workflow
   build-macos:
     name: Build macOS App
     max_build_duration: 60
     environment:
-      flutter: 3.35.3
+      flutter: "3.35.3"
       xcode: latest
     scripts:
       - name: Get Flutter packages
-        script: |
-          flutter packages pub get
-          
+        script: flutter packages pub get
       - name: Enable macOS desktop
-        script: |
-          flutter config --enable-macos-desktop
-          
+        script: flutter config --enable-macos-desktop
       - name: Generate code
-        script: |
-          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
-          
+        script: flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
       - name: Run tests
-        script: |
-          flutter test || echo "No tests found"
-          
+        script: flutter test || echo "No tests found"
       - name: Build macOS
-        script: |
-          flutter build macos --release
-          
+        script: flutter build macos --release
       - name: Create macOS DMG
         script: |
           cd build/macos/Build/Products/Release
           hdiutil create -volname "Flutter Zy" -srcfolder . -ov -format UDZO flutter_zy_macos.dmg
           echo "macOS build completed"
-          
     artifacts:
       - build/macos/Build/Products/Release/**
       - build/macos/Build/Products/Release/flutter_zy_macos.dmg
-      
     publishing:
       email:
         recipients:
@@ -255,43 +162,30 @@ EOF
           success: true
           failure: false
 
-  # Windows Build Workflow
   build-windows:
     name: Build Windows App
     max_build_duration: 45
     environment:
-      flutter: 3.35.3
+      flutter: "3.35.3"
     scripts:
       - name: Get Flutter packages
-        script: |
-          flutter packages pub get
-          
+        script: flutter packages pub get
       - name: Enable Windows desktop
-        script: |
-          flutter config --enable-windows-desktop
-          
+        script: flutter config --enable-windows-desktop
       - name: Generate code
-        script: |
-          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
-          
+        script: flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
       - name: Run tests
-        script: |
-          flutter test || echo "No tests found"
-          
+        script: flutter test || echo "No tests found"
       - name: Build Windows
-        script: |
-          flutter build windows --release
-          
+        script: flutter build windows --release
       - name: Create Windows installer
         script: |
           cd build/windows/x64/runner/Release
           zip -r flutter_zy_windows.zip *
           echo "Windows build completed"
-          
     artifacts:
       - build/windows/x64/runner/Release/**
       - build/windows/x64/runner/Release/flutter_zy_windows.zip
-      
     publishing:
       email:
         recipients:
@@ -300,7 +194,6 @@ EOF
           success: true
           failure: false
 
-  # Build All Platforms Workflow
   build-all:
     name: Build All Platforms
     max_build_duration: 120
@@ -311,69 +204,43 @@ EOF
     labels:
       - all-platforms
     environment:
-      flutter: 3.35.3
+      flutter: "3.35.3"
       xcode: latest
       java: 17
     scripts:
       - name: Get all Flutter packages
-        script: |
-          flutter packages pub get
-          
+        script: flutter packages pub get
       - name: Enable all desktop platforms
         script: |
           flutter config --enable-linux-desktop
           flutter config --enable-macos-desktop
           flutter config --enable-windows-desktop
-          
       - name: Generate code
-        script: |
-          flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
-          
+        script: flutter packages pub run build_runner build --delete-conflicting-outputs || echo "No code generation needed"
       - name: Run tests
-        script: |
-          flutter test || echo "No tests found"
-          
+        script: flutter test || echo "No tests found"
       - name: Setup iOS build
-        script: |
-          cd ios && pod install || true
-          
+        script: cd ios && pod install || true
       - name: Setup Android build
         script: |
           echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
           sdkmanager "platform-tools" "platforms;android-34" || true
-          
       - name: Build for all platforms
         script: |
-          # Build iOS
           flutter build ios --release --no-codesign || true
-          
-          # Build Android
           flutter build apk --release --tree-shake-icons || true
           flutter build appbundle --release --tree-shake-icons || true
-          
-          # Build desktop platforms
           flutter build linux --release || true
           flutter build macos --release || true
           flutter build windows --release || true
-          
     artifacts:
-      # iOS artifacts
       - build/ios/iphoneos/Runner.ipa
       - build/ios/iphoneos/Runner.app
-      
-      # Android artifacts
       - build/app/outputs/flutter-apk/app-release.apk
       - build/app/outputs/bundle/release/app-release.aab
-      
-      # Linux artifacts
       - build/linux/x64/release/bundle/flutter_zy_linux.tar.gz
-      
-      # macOS artifacts
       - build/macos/Build/Products/Release/flutter_zy_macos.dmg
-      
-      # Windows artifacts
       - build/windows/x64/runner/Release/flutter_zy_windows.zip
-      
     publishing:
       email:
         recipients:
