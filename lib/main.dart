@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -147,9 +149,81 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
     });
   }
 
+  List<Widget> _buildPositionedIcons({
+    required int columns,
+    required double itemWidth,
+    required double itemHeight,
+  }) {
+    final List<Widget> widgets = <Widget>[];
+    for (int index = 0; index < _icons.length; index++) {
+      final AppIconData icon = _icons[index];
+      final Offset offset = _slotOffset(
+        slot: index,
+        columns: columns,
+        itemWidth: itemWidth,
+        itemHeight: itemHeight,
+      );
+      widgets.add(
+        AnimatedPositioned(
+          key: ValueKey(icon.label),
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          left: offset.dx,
+          top: offset.dy,
+          width: itemWidth,
+          height: itemHeight,
+          child: _buildDraggableIcon(
+            index: index,
+            itemWidth: itemWidth,
+            itemHeight: itemHeight,
+          ),
+        ),
+      );
+    }
+
+    if (_draggingIcon != null) {
+      final Offset offset = _slotOffset(
+        slot: _icons.length,
+        columns: columns,
+        itemWidth: itemWidth,
+        itemHeight: itemHeight,
+      );
+      widgets.add(
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          left: offset.dx,
+          top: offset.dy,
+          width: itemWidth,
+          height: itemHeight,
+          child: _buildTrailingDropTarget(
+            itemWidth: itemWidth,
+            itemHeight: itemHeight,
+          ),
+        ),
+      );
+    }
+
+    return widgets;
+  }
+
+  Offset _slotOffset({
+    required int slot,
+    required int columns,
+    required double itemWidth,
+    required double itemHeight,
+  }) {
+    final int row = slot ~/ columns;
+    final int column = slot % columns;
+    final double dx = column * (itemWidth + _gridSpacing);
+    final double dy = row * (itemHeight + _runSpacing);
+    return Offset(dx, dy);
+  }
+
   Widget _buildDraggableIcon({
     required int index,
     required double itemWidth,
+    required double itemHeight,
   }) {
     final AppIconData icon = _icons[index];
     final bool isDragging = identical(_draggingIcon, icon);
@@ -180,35 +254,43 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       },
       builder: (context, candidateData, rejectedData) {
         final bool showHighlight = isHighlighted || candidateData.isNotEmpty;
-        return LongPressDraggable<AppIconData>(
-          data: icon,
-          dragAnchorStrategy: pointerDragAnchorStrategy,
-          feedback: _DragFeedback(icon: icon, size: itemWidth),
-          onDragStarted: () => _handleDragStart(index),
-          onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
-          childWhenDragging: _DropPlaceholder(
-            size: itemWidth,
-            isActive: showHighlight,
-            isVisible: true,
-          ),
-          child: AppleIconTile(
-            key: ValueKey(icon.label),
-            icon: icon,
-            isActive: isDragging,
-            isEditing: _isEditing,
-            isHighlighted: showHighlight,
-            onDelete: () => _handleDelete(icon),
-            size: itemWidth,
+        return SizedBox(
+          height: itemHeight,
+          child: LongPressDraggable<AppIconData>(
+            data: icon,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: _DragFeedback(icon: icon, size: itemWidth),
+            onDragStarted: () => _handleDragStart(index),
+            onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
+            childWhenDragging: _DropPlaceholder(
+              size: itemWidth,
+              height: itemHeight,
+              isActive: showHighlight,
+              isVisible: true,
+            ),
+            child: AppleIconTile(
+              key: ValueKey(icon.label),
+              icon: icon,
+              isActive: isDragging,
+              isEditing: _isEditing,
+              isHighlighted: showHighlight,
+              onDelete: () => _handleDelete(icon),
+              size: itemWidth,
+            ),
           ),
         );
       },
     );
   }
 
-  Widget _buildTrailingDropTarget(double itemWidth) {
+  Widget _buildTrailingDropTarget({
+    required double itemWidth,
+    required double itemHeight,
+  }) {
     final bool isActive = _hoverSlot == _icons.length && _draggingIcon != null;
     return SizedBox(
       width: itemWidth,
+      height: itemHeight,
       child: DragTarget<AppIconData>(
         onWillAccept: (data) => data != null,
         onMove: (details) {
@@ -232,6 +314,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
           final bool shouldShow = _draggingIcon != null || candidateData.isNotEmpty;
           return _DropPlaceholder(
             size: itemWidth,
+            height: itemHeight,
             isActive: isActive || candidateData.isNotEmpty,
             isVisible: shouldShow,
           );
@@ -296,8 +379,6 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const _StatusBar(),
-                        const SizedBox(height: 28),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
@@ -309,7 +390,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 20),
                         Expanded(
                           child: LayoutBuilder(
                             builder: (context, constraints) {
@@ -317,39 +398,38 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                               final int columns = _columnCountForWidth(width);
                               final double itemWidth =
                                   (width - _gridSpacing * (columns - 1)) / columns;
+                              final double itemHeight = itemWidth + 52;
+                              final int slotCount =
+                                  _icons.length + (_draggingIcon != null ? 1 : 0);
+                              final int rows = slotCount == 0
+                                  ? 0
+                                  : ((slotCount - 1) ~/ columns) + 1;
+                              final double gridHeight = rows == 0
+                                  ? itemHeight
+                                  : rows * itemHeight +
+                                      math.max(0, rows - 1) * _runSpacing;
 
                               return Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Expanded(
                                     child: SingleChildScrollView(
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(bottom: 24),
-                                        child: Wrap(
-                                          spacing: _gridSpacing,
-                                          runSpacing: _runSpacing,
-                                          alignment: WrapAlignment.start,
-                                          runAlignment: WrapAlignment.start,
-                                          children: [
-                                            for (int i = 0; i < _icons.length; i++)
-                                              SizedBox(
-                                                width: itemWidth,
-                                                child: _buildDraggableIcon(
-                                                  index: i,
-                                                  itemWidth: itemWidth,
-                                                ),
-                                              ),
-                                            if (_draggingIcon != null)
-                                              SizedBox(
-                                                width: itemWidth,
-                                                child: _buildTrailingDropTarget(itemWidth),
-                                              ),
-                                          ],
+                                      padding: const EdgeInsets.only(bottom: 24),
+                                      child: SizedBox(
+                                        height: gridHeight,
+                                        child: Stack(
+                                          clipBehavior: Clip.none,
+                                          children: _buildPositionedIcons(
+                                            columns: columns,
+                                            itemWidth: itemWidth,
+                                            itemHeight: itemHeight,
+                                          ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(height: 12),
+                                  const _Dock(),
+                                  const SizedBox(height: 16),
                                   const _HomeIndicator(),
                                 ],
                               );
@@ -579,11 +659,13 @@ class AppleIconBody extends StatelessWidget {
 class _DropPlaceholder extends StatelessWidget {
   const _DropPlaceholder({
     required this.size,
+    required this.height,
     required this.isActive,
     required this.isVisible,
   });
 
   final double size;
+  final double height;
   final bool isActive;
   final bool isVisible;
 
@@ -598,7 +680,7 @@ class _DropPlaceholder extends StatelessWidget {
       duration: const Duration(milliseconds: 150),
       opacity: isActive ? 1 : 0.75,
       child: SizedBox(
-        height: size + 40,
+        height: height,
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(radius),
@@ -692,209 +774,6 @@ class _DragFeedback extends StatelessWidget {
   }
 }
 
-class _StatusBar extends StatefulWidget {
-  const _StatusBar();
-
-  @override
-  State<_StatusBar> createState() => _StatusBarState();
-}
-
-class _StatusBarState extends State<_StatusBar> {
-  late DateTime _now;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _now = DateTime.now();
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) {
-      setState(() {
-        _now = DateTime.now();
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  String _formatTime() {
-    final TimeOfDay timeOfDay = TimeOfDay.fromDateTime(_now);
-    final String hour = timeOfDay.hour.toString().padLeft(2, '0');
-    final String minute = timeOfDay.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(
-          _formatTime(),
-          style: const TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-            letterSpacing: -0.5,
-          ),
-        ),
-        const Spacer(),
-        const _SignalStrengthIcon(),
-        const SizedBox(width: 6),
-        const _WifiIcon(),
-        const SizedBox(width: 6),
-        const _BatteryIcon(),
-      ],
-    );
-  }
-}
-
-class _SignalStrengthIcon extends StatelessWidget {
-  const _SignalStrengthIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 22,
-      height: 12,
-      child: CustomPaint(
-        painter: _SignalStrengthPainter(),
-      ),
-    );
-  }
-}
-
-class _SignalStrengthPainter extends CustomPainter {
-  const _SignalStrengthPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    final double barWidth = size.width / 9;
-    final double gap = barWidth * 0.9;
-    for (int i = 0; i < 4; i++) {
-      final double heightFactor = (i + 1) / 4;
-      final double barHeight = size.height * heightFactor;
-      final double dx = i * (barWidth + gap);
-      final Rect rect = Rect.fromLTWH(
-        dx,
-        size.height - barHeight,
-        barWidth,
-        barHeight,
-      );
-      final RRect rRect = RRect.fromRectAndRadius(rect, const Radius.circular(1.5));
-      canvas.drawRRect(rRect, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _WifiIcon extends StatelessWidget {
-  const _WifiIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 18,
-      height: 12,
-      child: CustomPaint(
-        painter: _WifiPainter(),
-      ),
-    );
-  }
-}
-
-class _WifiPainter extends CustomPainter {
-  const _WifiPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..strokeCap = StrokeCap.round;
-
-    final Offset center = Offset(size.width / 2, size.height);
-    for (int i = 0; i < 3; i++) {
-      final double factor = (i + 1) / 3;
-      final double radius = size.width / 2 * factor;
-      final Rect rect = Rect.fromCircle(center: center, radius: radius);
-      final Path path = Path()
-        ..addArc(rect, math.pi, math.pi);
-      canvas.drawPath(path, paint);
-    }
-
-    final Paint dotPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(center, 1.6, dotPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _BatteryIcon extends StatelessWidget {
-  const _BatteryIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 26,
-      height: 12,
-      child: CustomPaint(
-        painter: _BatteryPainter(),
-      ),
-    );
-  }
-}
-
-class _BatteryPainter extends CustomPainter {
-  const _BatteryPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double bodyWidth = size.width - 3;
-    final Rect bodyRect = Rect.fromLTWH(0, 0, bodyWidth, size.height);
-    final RRect body = RRect.fromRectAndRadius(bodyRect, const Radius.circular(2.5));
-
-    final Paint outlinePaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4;
-    canvas.drawRRect(body, outlinePaint);
-
-    final double levelPadding = 2.2;
-    final Rect levelRect = Rect.fromLTWH(
-      levelPadding,
-      levelPadding,
-      bodyWidth - levelPadding * 2,
-      size.height - levelPadding * 2,
-    );
-    final RRect level = RRect.fromRectAndRadius(levelRect, const Radius.circular(1.6));
-    final Paint levelPaint = Paint()
-      ..shader = const LinearGradient(
-        colors: [Color(0xFF4CD964), Color(0xFF2ECC71)],
-      ).createShader(levelRect);
-    canvas.drawRRect(level, levelPaint);
-
-    final Rect capRect = Rect.fromLTWH(bodyWidth + 0.6, size.height / 2 - 2, 2.4, 4);
-    final RRect cap = RRect.fromRectAndRadius(capRect, const Radius.circular(1));
-    final Paint capPaint = Paint()..color = Colors.white;
-    canvas.drawRRect(cap, capPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
 class _HomeIndicator extends StatelessWidget {
   const _HomeIndicator();
 
@@ -910,6 +789,120 @@ class _HomeIndicator extends StatelessWidget {
           borderRadius: BorderRadius.circular(3),
         ),
       ),
+    );
+  }
+}
+
+class _Dock extends StatelessWidget {
+  const _Dock();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(34),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.22),
+              borderRadius: BorderRadius.circular(34),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.28),
+                width: 1.2,
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: const [
+                _DockIcon(
+                  icon: CupertinoIcons.phone_fill,
+                  label: 'Phone',
+                  colors: [Color(0xFF39D87E), Color(0xFF28B865)],
+                ),
+                _DockIcon(
+                  icon: CupertinoIcons.chat_bubble_2_fill,
+                  label: 'Messages',
+                  colors: [Color(0xFF7CD1FF), Color(0xFF3AA8F2)],
+                ),
+                _DockIcon(
+                  icon: CupertinoIcons.compass_fill,
+                  label: 'Safari',
+                  colors: [Color(0xFF66B8FF), Color(0xFF0A7AFF)],
+                ),
+                _DockIcon(
+                  icon: CupertinoIcons.music_note_2,
+                  label: 'Music',
+                  colors: [Color(0xFFFF7A7A), Color(0xFFFA2C55)],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DockIcon extends StatelessWidget {
+  const _DockIcon({
+    required this.icon,
+    required this.label,
+    required this.colors,
+  });
+
+  final IconData icon;
+  final String label;
+  final List<Color> colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: colors,
+            ),
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.18),
+                blurRadius: 18,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          child: Icon(
+            icon,
+            size: 34,
+            color: Colors.white,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            shadows: [
+              Shadow(
+                color: Colors.black45,
+                offset: Offset(0, 1),
+                blurRadius: 6,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
