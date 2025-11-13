@@ -45,6 +45,21 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   int? _dragStartIndex;
   int? _hoverSlot;
 
+  @override
+  void initState() {
+    super.initState();
+    _scheduleSystemUiUpdate();
+  }
+
+  @override
+  void dispose() {
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
+    super.dispose();
+  }
+
   void _handleDragStart(int index) {
     final AppIconData icon = _icons[index];
     HapticFeedback.heavyImpact();
@@ -54,6 +69,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _dragStartIndex = index;
       _hoverSlot = index;
     });
+    _scheduleSystemUiUpdate();
   }
 
   void _handleDragEnd({required bool wasAccepted}) {
@@ -71,6 +87,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _dragStartIndex = null;
       _hoverSlot = null;
     });
+    _scheduleSystemUiUpdate();
   }
 
   void _handleDelete(AppIconData icon) {
@@ -85,6 +102,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
         _dragStartIndex = null;
       }
     });
+    _scheduleSystemUiUpdate();
   }
 
   void _handleDonePressed() {
@@ -93,6 +111,21 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _draggingIcon = null;
       _hoverSlot = null;
       _dragStartIndex = null;
+    });
+    _scheduleSystemUiUpdate();
+  }
+
+  void _scheduleSystemUiUpdate() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: _isEditing
+            ? const [SystemUiOverlay.bottom]
+            : SystemUiOverlay.values,
+      );
     });
   }
 
@@ -325,6 +358,12 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
 
   @override
   Widget build(BuildContext context) {
+    final MediaQueryData mediaQuery = MediaQuery.of(context);
+    final double safeTop = mediaQuery.padding.top;
+    final double safeBottom = mediaQuery.padding.bottom;
+    final double doneTop = _isEditing ? 14 : safeTop + 14;
+    final double contentTopPadding = _isEditing ? 72 : safeTop + 44;
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Container(
@@ -370,76 +409,82 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                 ),
               ),
             ),
-            SafeArea(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: _maxContentWidth),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 200),
-                              child: _isEditing
-                                  ? _DoneButton(onPressed: _handleDonePressed)
-                                  : const SizedBox(width: 62),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        Expanded(
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              final double width = constraints.maxWidth;
-                              final int columns = _columnCountForWidth(width);
-                              final double itemWidth =
-                                  (width - _gridSpacing * (columns - 1)) / columns;
-                              final double itemHeight = itemWidth + 52;
-                              final int slotCount =
-                                  _icons.length + (_draggingIcon != null ? 1 : 0);
-                              final int rows = slotCount == 0
-                                  ? 0
-                                  : ((slotCount - 1) ~/ columns) + 1;
-                              final double gridHeight = rows == 0
-                                  ? itemHeight
-                                  : rows * itemHeight +
-                                      math.max(0, rows - 1) * _runSpacing;
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _maxContentWidth),
+                child: AnimatedPadding(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOut,
+                  padding: EdgeInsets.fromLTRB(
+                    20,
+                    contentTopPadding,
+                    20,
+                    safeBottom + 48,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final double width = constraints.maxWidth;
+                            final int columns = _columnCountForWidth(width);
+                            final double itemWidth =
+                                (width - _gridSpacing * (columns - 1)) / columns;
+                            final double itemHeight = itemWidth + 52;
+                            final int slotCount =
+                                _icons.length + (_draggingIcon != null ? 1 : 0);
+                            final int rows = slotCount == 0
+                                ? 0
+                                : ((slotCount - 1) ~/ columns) + 1;
+                            final double gridHeight = rows == 0
+                                ? itemHeight
+                                : rows * itemHeight +
+                                    math.max(0, rows - 1) * _runSpacing;
 
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Expanded(
-                                    child: SingleChildScrollView(
-                                      padding: const EdgeInsets.only(bottom: 24),
-                                      child: SizedBox(
-                                        height: gridHeight,
-                                        child: Stack(
-                                          clipBehavior: Clip.none,
-                                          children: _buildPositionedIcons(
-                                            columns: columns,
-                                            itemWidth: itemWidth,
-                                            itemHeight: itemHeight,
-                                          ),
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Expanded(
+                                  child: SingleChildScrollView(
+                                    padding: const EdgeInsets.only(bottom: 24),
+                                    child: SizedBox(
+                                      height: gridHeight,
+                                      child: Stack(
+                                        clipBehavior: Clip.none,
+                                        children: _buildPositionedIcons(
+                                          columns: columns,
+                                          itemWidth: itemWidth,
+                                          itemHeight: itemHeight,
                                         ),
                                       ),
                                     ),
                                   ),
-                                  const _Dock(),
-                                  const SizedBox(height: 16),
-                                  const _HomeIndicator(),
-                                ],
-                              );
-                            },
-                          ),
+                                ),
+                                const SizedBox(height: 24),
+                                const _Dock(),
+                                const SizedBox(height: 16),
+                                const _HomeIndicator(),
+                              ],
+                            );
+                          },
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
+              ),
+            ),
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOut,
+              top: doneTop,
+              right: 20,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: _isEditing
+                    ? _DoneButton(onPressed: _handleDonePressed)
+                    : const SizedBox.shrink(),
               ),
             ),
           ],
