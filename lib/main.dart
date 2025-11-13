@@ -33,13 +33,56 @@ class AppleIconSortPage extends StatefulWidget {
 }
 
 class _AppleIconSortPageState extends State<AppleIconSortPage> {
-  static const double _gridSpacing = 20; // 增加间距使图标变小
-  static const int _iconsPerPage = 24; // 每页最多24个图标 (4x6)
+  static const double _gridSpacing = 30; // 增加间距使图标更小，但保持数量不变
+  static const int _iconsPerPage = 24; // 每页最多24个图标 (4x6) - 保持原数量
 
-  late List<AppIconData> _icons = List.of(_defaultIcons)
-    ..removeWhere((a) => {
-      'Instagram', 'Twitter', 'WhatsApp', 'YouTube'
-    }.contains(a.label));
+  late List<List<AppIconData>> _pages = _initializePages();
+
+  List<List<AppIconData>> _initializePages() {
+    // 获取非Dock栏图标
+    final List<AppIconData> nonDockIcons = _defaultIcons
+        .where((a) => !{
+            'Instagram', 'Twitter', 'WhatsApp', 'YouTube'
+          }.contains(a.label))
+        .toList();
+
+    // 将Gmail单独提取出来
+    AppIconData? gmailIcon;
+    final List<AppIconData> otherIcons = [];
+
+    for (final icon in nonDockIcons) {
+      if (icon.label == 'Gmail') {
+        gmailIcon = icon;
+      } else {
+        otherIcons.add(icon);
+      }
+    }
+
+    // 创建分页数据
+    final List<List<AppIconData>> pages = [];
+    const int iconsPerPage = 24;
+
+    // 第一页：其他图标
+    for (int i = 0; i < otherIcons.length; i += iconsPerPage) {
+      final int end = math.min(i + iconsPerPage, otherIcons.length);
+      pages.add(otherIcons.sublist(i, end));
+    }
+
+    // 第二页：只放Gmail
+    if (gmailIcon != null) {
+      pages.add([gmailIcon]);
+    } else {
+      pages.add([]);
+    }
+
+    // 确保至少有2页
+    while (pages.length < 2) {
+      pages.add([]);
+    }
+
+    return pages;
+  }
+
   late List<AppIconData> _dockIcons = [
     for (final a in _defaultIcons)
       if ({'Instagram', 'Twitter', 'WhatsApp', 'YouTube'}.contains(a.label)) a,
@@ -52,6 +95,14 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   bool _dragFromDock = false;
   int _currentPage = 0;
   final PageController _pageController = PageController();
+
+  // 获取当前页的图标
+  List<AppIconData> get _currentIcons => _pages[_currentPage];
+
+  // 获取所有图标（用于搜索和管理）
+  List<AppIconData> get _allIcons {
+    return _pages.expand((page) => page).toList();
+  }
 
   void _setSystemUiEditing(bool editing) {
     if (editing) {
@@ -67,7 +118,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   }
 
   void _handleDragStart(BuildContext context, int index) {
-    final AppIconData icon = _icons[index];
+    final AppIconData icon = _currentIcons[index];
     HapticFeedback.heavyImpact();
     setState(() {
       _isEditing = true;
@@ -110,11 +161,12 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
             _dockIcons.insert(restoredIndex, item);
           }
         } else {
-          final int currentIndex = _icons.indexOf(icon);
+          // 查找图标在当前页面中的位置并恢复
+          final int currentIndex = _currentIcons.indexOf(icon);
           if (currentIndex != -1) {
-            final AppIconData item = _icons.removeAt(currentIndex);
-            final int restoredIndex = math.max(0, math.min(_dragStartIndex!, _icons.length));
-            _icons.insert(restoredIndex, item);
+            final AppIconData item = _pages[_currentPage].removeAt(currentIndex);
+            final int restoredIndex = math.max(0, math.min(_dragStartIndex!, _currentIcons.length));
+            _pages[_currentPage].insert(restoredIndex, item);
           }
         }
       }
@@ -127,8 +179,22 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
 
   void _handleDelete(AppIconData icon) {
     setState(() {
-      _icons.remove(icon);
-      if (_icons.isEmpty) {
+      // 查找并删除图标
+      for (int i = 0; i < _pages.length; i++) {
+        if (_pages[i].remove(icon)) {
+          break; // 只删除找到的第一个匹配项
+        }
+      }
+      if (_currentIcons.isEmpty && _currentPage > 0) {
+        // 如果当前页为空且不是第一页，切换到前一页
+        _currentPage--;
+        _pageController.animateToPage(
+          _currentPage,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+      }
+      if (_allIcons.isEmpty) {
         _isEditing = false;
       }
       if (identical(_draggingIcon, icon)) {
@@ -186,29 +252,66 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   }
 
   void _updateDragPosition(AppIconData icon, int slot) {
-    final int currentIndex = _icons.indexOf(icon);
-    if (currentIndex == -1) {
-      // 从 Dock 拖到桌面，插入到中间位置
+    // 查找图标在所有页面中的位置
+    int findIconPageIndex(AppIconData icon) {
+      for (int i = 0; i < _pages.length; i++) {
+        if (_pages[i].contains(icon)) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    int findIconIndexInPage(AppIconData icon, int pageIndex) {
+      return _pages[pageIndex].indexOf(icon);
+    }
+
+    // 查找图标在当前页面中的位置
+    int currentPageIndex = _currentPage;
+    int currentIndexInPage = findIconIndexInPage(icon, currentPageIndex);
+    int iconPageIndex = findIconPageIndex(icon);
+
+    // 如果图标不在任何页面中，说明是从 Dock 拖到桌面
+    if (iconPageIndex == -1) {
       setState(() {
-        final int middleIndex = _icons.length ~/ 2;
-        _icons.insert(middleIndex, icon);
+        // 从 Dock 拖到桌面，插入到当前页的中间位置
+        final int middleIndex = _currentIcons.length ~/ 2;
+        _pages[_currentPage].insert(middleIndex, icon);
         _dockIcons.remove(icon);
         _hoverSlot = middleIndex;
+        // 检查是否需要创建新页面
+        _checkAndCreatePageIfNeeded();
       });
       return;
     }
 
-    int desiredIndex = slot;
-    if (currentIndex < slot) {
-      desiredIndex -= 1;
-    }
-    if (_icons.isEmpty) {
-      desiredIndex = 0;
-    } else {
-      desiredIndex = math.max(0, math.min(desiredIndex, _icons.length - 1));
+    // 如果图标在其他页面，需要先移动到当前页面
+    if (iconPageIndex != currentPageIndex) {
+      setState(() {
+        // 从原页面移除
+        _pages[iconPageIndex].remove(icon);
+        // 插入到当前页面的指定位置
+        int insertIndex = math.min(slot, _currentIcons.length);
+        _pages[_currentPage].insert(insertIndex, icon);
+        _hoverSlot = insertIndex;
+        // 检查是否需要创建新页面
+        _checkAndCreatePageIfNeeded();
+      });
+      return;
     }
 
-    if (desiredIndex == currentIndex) {
+    // 图标在当前页面内移动
+    int desiredIndex = slot;
+    if (currentIndexInPage < slot) {
+      desiredIndex -= 1;
+    }
+    if (_currentIcons.isEmpty) {
+      desiredIndex = 0;
+    } else {
+      desiredIndex = math.max(0, math.min(desiredIndex, _currentIcons.length - 1));
+    }
+
+    if (desiredIndex == currentIndexInPage) {
       if (_hoverSlot != slot) {
         setState(() {
           _hoverSlot = slot;
@@ -218,22 +321,49 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
     }
 
     setState(() {
-      final AppIconData item = _icons.removeAt(currentIndex);
+      final AppIconData item = _pages[_currentPage].removeAt(currentIndexInPage);
       int insertIndex = slot;
-      if (currentIndex < slot) {
+      if (currentIndexInPage < slot) {
         insertIndex -= 1;
       }
-      insertIndex = math.max(0, math.min(insertIndex, _icons.length));
-      _icons.insert(insertIndex, item);
+      insertIndex = math.max(0, math.min(insertIndex, _currentIcons.length));
+      _pages[_currentPage].insert(insertIndex, item);
       _hoverSlot = slot;
     });
+  }
+
+  void _checkAndCreatePageIfNeeded() {
+    // 如果当前页面满了，自动创建新页面
+    if (_currentIcons.length > _iconsPerPage) {
+      // 创建新页面
+      final List<AppIconData> overflowIcons = _pages[_currentPage].sublist(_iconsPerPage);
+      _pages[_currentPage] = _pages[_currentPage].sublist(0, _iconsPerPage);
+
+      // 如果还有下一页，将溢出的图标添加到下一页
+      if (_currentPage + 1 < _pages.length) {
+        _pages[_currentPage + 1].insertAll(0, overflowIcons);
+      } else {
+        // 创建新的页面
+        _pages.add(overflowIcons);
+      }
+
+      // 切换到新的页面
+      if (_currentPage + 1 < _pages.length) {
+        _currentPage++;
+        _pageController.animateToPage(
+          _currentPage,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+      }
+    }
   }
 
   Widget _buildDraggableIcon({
     required int index,
     required double itemWidth,
   }) {
-    final AppIconData icon = _icons[index];
+    final AppIconData icon = _currentIcons[index];
     final bool isDragging = identical(_draggingIcon, icon);
     final bool isHighlighted = _hoverSlot == index && _draggingIcon != null;
 
@@ -288,18 +418,18 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   }
 
   Widget _buildTrailingDropTarget(double itemWidth) {
-    final bool isActive = _hoverSlot == _icons.length && _draggingIcon != null;
+    final bool isActive = _hoverSlot == _currentIcons.length && _draggingIcon != null;
     return SizedBox(
       width: itemWidth,
       child: DragTarget<AppIconData>(
         onWillAccept: (data) => data != null,
         onMove: (details) {
           if (details.data != null) {
-            _updateDragPosition(details.data, _icons.length);
+            _updateDragPosition(details.data, _currentIcons.length);
           }
         },
         onLeave: (_) {
-          if (_hoverSlot == _icons.length && _draggingIcon != null) {
+          if (_hoverSlot == _currentIcons.length && _draggingIcon != null) {
             setState(() {
               _hoverSlot = null;
             });
@@ -307,7 +437,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
         },
         onAccept: (_) {
           setState(() {
-            _hoverSlot = _icons.length;
+            _hoverSlot = _currentIcons.length;
           });
         },
         builder: (context, candidateData, rejectedData) {
@@ -325,7 +455,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   Widget _buildDock(BuildContext context) {
     final double screenWidth = MediaQuery.of(context).size.width;
     const int columns = 4;
-    const double spacing = 16; // 减小间距
+    const double spacing = 25; // 增加间距使Dock图标更小，与主页面一致
     const double horizontalPadding = 12;
     // 计算可用宽度：屏幕宽度 - 左右外边距(36) - 左右内边距(24)
     final double availableWidth = screenWidth - 36 - (horizontalPadding * 2);
@@ -362,7 +492,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                 },
                 onAccept: (data) {
                   setState(() {
-                    _icons.remove(data);
+                    _currentIcons.remove(data);
                     if (_dockIcons.contains(data)) {
                       _dockIcons.remove(data);
                     }
@@ -389,7 +519,12 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                   if (!hasIcon) {
                     return _DropPlaceholder(size: itemWidth, isActive: active, isVisible: true);
                   }
-                  return const SizedBox.shrink(); // 槽位本身不显示内容
+                  // 如果有图标，显示占位符但保持透明
+                  return Container(
+                    width: itemWidth,
+                    height: itemWidth,
+                    color: Colors.transparent,
+                  );
                 },
               ),
             ),
@@ -489,7 +624,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                           _currentPage = page;
                         });
                       },
-                      itemCount: math.max(2, (_icons.length / _iconsPerPage).ceil()), // 至少2页
+                      itemCount: math.max(2, _pages.length), // 使用实际的分页数量，至少2页
                       itemBuilder: (context, pageIndex) {
                         return Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
@@ -501,9 +636,10 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                                   (width - _gridSpacing * (columns - 1)) / columns;
 
                               final double cellHeight = itemWidth + 40;
-                              final int startIndex = pageIndex * _iconsPerPage;
-                              final int endIndex = math.min(startIndex + _iconsPerPage, _icons.length);
-                              final List<AppIconData> pageIcons = _icons.sublist(startIndex, endIndex);
+                              // 获取当前页面的图标
+                              final List<AppIconData> pageIcons = pageIndex < _pages.length
+                                  ? _pages[pageIndex]
+                                  : [];
 
                               return Stack(
                                 clipBehavior: Clip.none,
@@ -517,17 +653,15 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                                       itemWidth: itemWidth,
                                       itemHeight: cellHeight,
                                       child: _buildDraggableIcon(
-                                        index: startIndex + i,
+                                        index: i,
                                         itemWidth: itemWidth,
                                       ),
                                     ),
-                                  if (_draggingIcon != null && 
-                                      _hoverSlot != null && 
-                                      _hoverSlot! >= startIndex && 
-                                      _hoverSlot! <= endIndex)
+                                  if (_draggingIcon != null &&
+                                      _hoverSlot != null)
                                     _AnimatedGridItem(
                                       key: const ValueKey('trailing_drop'),
-                                      index: _hoverSlot! - startIndex,
+                                      index: _hoverSlot!,
                                       columns: columns,
                                       spacing: _gridSpacing,
                                       itemWidth: itemWidth,
@@ -548,7 +682,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        for (int i = 0; i < math.max(2, (_icons.length / _iconsPerPage).ceil()); i++)
+                        for (int i = 0; i < math.max(2, _pages.length); i++)
                             Container(
                               margin: const EdgeInsets.symmetric(horizontal: 4),
                               width: 6,
