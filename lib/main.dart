@@ -35,9 +35,9 @@ class AppleIconSortPage extends StatefulWidget {
 }
 
 class _AppleIconSortPageState extends State<AppleIconSortPage> {
-  static const double _gridSpacing = 26;
-  static const double _runSpacing = 32;
-  static const double _maxContentWidth = 760;
+  static const double _gridSpacing = 20;
+  static const double _runSpacing = 24;
+  static const double _maxContentWidth = 680;
 
   final List<AppIconData> _icons = List.of(_defaultIcons);
   bool _isEditing = false;
@@ -54,6 +54,17 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _dragStartIndex = index;
       _hoverSlot = index;
     });
+    // 确保所有图标开始抖动
+    for (int i = 0; i < _icons.length; i++) {
+      if (i != index) {
+        // 延迟启动其他图标的抖动，创建波浪效果
+        Future.delayed(Duration(milliseconds: 50 * (i - index).abs()), () {
+          if (mounted && _isEditing) {
+            // 抖动将通过AppleIconTile的didUpdateWidget触发
+          }
+        });
+      }
+    }
   }
 
   void _handleDragEnd({required bool wasAccepted}) {
@@ -398,7 +409,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                               final int columns = _columnCountForWidth(width);
                               final double itemWidth =
                                   (width - _gridSpacing * (columns - 1)) / columns;
-                              final double itemHeight = itemWidth + 52;
+                              final double itemHeight = itemWidth + 48;
                               final int slotCount =
                                   _icons.length + (_draggingIcon != null ? 1 : 0);
                               final int rows = slotCount == 0
@@ -413,24 +424,19 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Expanded(
-                                    child: SingleChildScrollView(
-                                      padding: const EdgeInsets.only(bottom: 24),
-                                      child: SizedBox(
-                                        height: gridHeight,
-                                        child: Stack(
-                                          clipBehavior: Clip.none,
-                                          children: _buildPositionedIcons(
-                                            columns: columns,
-                                            itemWidth: itemWidth,
-                                            itemHeight: itemHeight,
-                                          ),
+                                    child: SizedBox(
+                                      height: gridHeight,
+                                      child: Stack(
+                                        clipBehavior: Clip.none,
+                                        children: _buildPositionedIcons(
+                                          columns: columns,
+                                          itemWidth: itemWidth,
+                                          itemHeight: itemHeight,
                                         ),
                                       ),
                                     ),
                                   ),
                                   const _Dock(),
-                                  const SizedBox(height: 16),
-                                  const _HomeIndicator(),
                                 ],
                               );
                             },
@@ -779,17 +785,7 @@ class _HomeIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: Container(
-        width: 134,
-        height: 5,
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.55),
-          borderRadius: BorderRadius.circular(3),
-        ),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 }
 
@@ -798,17 +794,18 @@ class _Dock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(34),
+        borderRadius: BorderRadius.circular(30),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.22),
-              borderRadius: BorderRadius.circular(34),
+              borderRadius: BorderRadius.circular(30),
               border: Border.all(
                 color: Colors.white.withOpacity(0.28),
                 width: 1.2,
@@ -863,15 +860,15 @@ class _DockIcon extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 72,
-          height: 72,
+          width: 64,
+          height: 64,
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: colors,
             ),
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(20),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.18),
@@ -882,16 +879,16 @@ class _DockIcon extends StatelessWidget {
           ),
           child: Icon(
             icon,
-            size: 34,
+            size: 30,
             color: Colors.white,
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         Text(
           label,
           style: const TextStyle(
             color: Colors.white,
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: FontWeight.w600,
             shadows: [
               Shadow(
