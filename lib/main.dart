@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -33,15 +35,30 @@ class AppleIconSortPage extends StatefulWidget {
 }
 
 class _AppleIconSortPageState extends State<AppleIconSortPage> {
-  static const double _gridSpacing = 26;
-  static const double _runSpacing = 32;
-  static const double _maxContentWidth = 760;
+  static const double _gridSpacing = 20;
+  static const double _runSpacing = 24;
+  static const double _maxContentWidth = 680;
 
   final List<AppIconData> _icons = List.of(_defaultIcons);
   bool _isEditing = false;
   AppIconData? _draggingIcon;
   int? _dragStartIndex;
   int? _hoverSlot;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleSystemUiUpdate();
+  }
+
+  @override
+  void dispose() {
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
+    super.dispose();
+  }
 
   void _handleDragStart(int index) {
     final AppIconData icon = _icons[index];
@@ -52,6 +69,21 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _dragStartIndex = index;
       _hoverSlot = index;
     });
+<<<<<<< HEAD
+    // 确保所有图标开始抖动
+    for (int i = 0; i < _icons.length; i++) {
+      if (i != index) {
+        // 延迟启动其他图标的抖动，创建波浪效果
+        Future.delayed(Duration(milliseconds: 50 * (i - index).abs()), () {
+          if (mounted && _isEditing) {
+            // 抖动将通过AppleIconTile的didUpdateWidget触发
+          }
+        });
+      }
+    }
+=======
+    _scheduleSystemUiUpdate();
+>>>>>>> 8c8b8925fdebd683d60e09a85316af3d558eab2f
   }
 
   void _handleDragEnd({required bool wasAccepted}) {
@@ -69,6 +101,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _dragStartIndex = null;
       _hoverSlot = null;
     });
+    _scheduleSystemUiUpdate();
   }
 
   void _handleDelete(AppIconData icon) {
@@ -83,6 +116,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
         _dragStartIndex = null;
       }
     });
+    _scheduleSystemUiUpdate();
   }
 
   void _handleDonePressed() {
@@ -91,6 +125,21 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _draggingIcon = null;
       _hoverSlot = null;
       _dragStartIndex = null;
+    });
+    _scheduleSystemUiUpdate();
+  }
+
+  void _scheduleSystemUiUpdate() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: _isEditing
+            ? const [SystemUiOverlay.bottom]
+            : SystemUiOverlay.values,
+      );
     });
   }
 
@@ -147,9 +196,81 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
     });
   }
 
+  List<Widget> _buildPositionedIcons({
+    required int columns,
+    required double itemWidth,
+    required double itemHeight,
+  }) {
+    final List<Widget> widgets = <Widget>[];
+    for (int index = 0; index < _icons.length; index++) {
+      final AppIconData icon = _icons[index];
+      final Offset offset = _slotOffset(
+        slot: index,
+        columns: columns,
+        itemWidth: itemWidth,
+        itemHeight: itemHeight,
+      );
+      widgets.add(
+        AnimatedPositioned(
+          key: ValueKey(icon.label),
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          left: offset.dx,
+          top: offset.dy,
+          width: itemWidth,
+          height: itemHeight,
+          child: _buildDraggableIcon(
+            index: index,
+            itemWidth: itemWidth,
+            itemHeight: itemHeight,
+          ),
+        ),
+      );
+    }
+
+    if (_draggingIcon != null) {
+      final Offset offset = _slotOffset(
+        slot: _icons.length,
+        columns: columns,
+        itemWidth: itemWidth,
+        itemHeight: itemHeight,
+      );
+      widgets.add(
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          left: offset.dx,
+          top: offset.dy,
+          width: itemWidth,
+          height: itemHeight,
+          child: _buildTrailingDropTarget(
+            itemWidth: itemWidth,
+            itemHeight: itemHeight,
+          ),
+        ),
+      );
+    }
+
+    return widgets;
+  }
+
+  Offset _slotOffset({
+    required int slot,
+    required int columns,
+    required double itemWidth,
+    required double itemHeight,
+  }) {
+    final int row = slot ~/ columns;
+    final int column = slot % columns;
+    final double dx = column * (itemWidth + _gridSpacing);
+    final double dy = row * (itemHeight + _runSpacing);
+    return Offset(dx, dy);
+  }
+
   Widget _buildDraggableIcon({
     required int index,
     required double itemWidth,
+    required double itemHeight,
   }) {
     final AppIconData icon = _icons[index];
     final bool isDragging = identical(_draggingIcon, icon);
@@ -180,35 +301,43 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       },
       builder: (context, candidateData, rejectedData) {
         final bool showHighlight = isHighlighted || candidateData.isNotEmpty;
-        return LongPressDraggable<AppIconData>(
-          data: icon,
-          dragAnchorStrategy: pointerDragAnchorStrategy,
-          feedback: _DragFeedback(icon: icon, size: itemWidth),
-          onDragStarted: () => _handleDragStart(index),
-          onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
-          childWhenDragging: _DropPlaceholder(
-            size: itemWidth,
-            isActive: showHighlight,
-            isVisible: true,
-          ),
-          child: AppleIconTile(
-            key: ValueKey(icon.label),
-            icon: icon,
-            isActive: isDragging,
-            isEditing: _isEditing,
-            isHighlighted: showHighlight,
-            onDelete: () => _handleDelete(icon),
-            size: itemWidth,
+        return SizedBox(
+          height: itemHeight,
+          child: LongPressDraggable<AppIconData>(
+            data: icon,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: _DragFeedback(icon: icon, size: itemWidth),
+            onDragStarted: () => _handleDragStart(index),
+            onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
+            childWhenDragging: _DropPlaceholder(
+              size: itemWidth,
+              height: itemHeight,
+              isActive: showHighlight,
+              isVisible: true,
+            ),
+            child: AppleIconTile(
+              key: ValueKey(icon.label),
+              icon: icon,
+              isActive: isDragging,
+              isEditing: _isEditing,
+              isHighlighted: showHighlight,
+              onDelete: () => _handleDelete(icon),
+              size: itemWidth,
+            ),
           ),
         );
       },
     );
   }
 
-  Widget _buildTrailingDropTarget(double itemWidth) {
+  Widget _buildTrailingDropTarget({
+    required double itemWidth,
+    required double itemHeight,
+  }) {
     final bool isActive = _hoverSlot == _icons.length && _draggingIcon != null;
     return SizedBox(
       width: itemWidth,
+      height: itemHeight,
       child: DragTarget<AppIconData>(
         onWillAccept: (data) => data != null,
         onMove: (details) {
@@ -232,6 +361,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
           final bool shouldShow = _draggingIcon != null || candidateData.isNotEmpty;
           return _DropPlaceholder(
             size: itemWidth,
+            height: itemHeight,
             isActive: isActive || candidateData.isNotEmpty,
             isVisible: shouldShow,
           );
@@ -242,6 +372,12 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
 
   @override
   Widget build(BuildContext context) {
+    final MediaQueryData mediaQuery = MediaQuery.of(context);
+    final double safeTop = mediaQuery.padding.top;
+    final double safeBottom = mediaQuery.padding.bottom;
+    final double doneTop = _isEditing ? 14 : safeTop + 14;
+    final double contentTopPadding = _isEditing ? 72 : safeTop + 44;
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Container(
@@ -287,6 +423,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                 ),
               ),
             ),
+<<<<<<< HEAD
             SafeArea(
               child: Center(
                 child: ConstrainedBox(
@@ -296,8 +433,6 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const _StatusBar(),
-                        const SizedBox(height: 28),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
@@ -309,7 +444,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 20),
                         Expanded(
                           child: LayoutBuilder(
                             builder: (context, constraints) {
@@ -317,49 +452,98 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                               final int columns = _columnCountForWidth(width);
                               final double itemWidth =
                                   (width - _gridSpacing * (columns - 1)) / columns;
+                              final double itemHeight = itemWidth + 48;
+                              final int slotCount =
+                                  _icons.length + (_draggingIcon != null ? 1 : 0);
+                              final int rows = slotCount == 0
+                                  ? 0
+                                  : ((slotCount - 1) ~/ columns) + 1;
+                              final double gridHeight = rows == 0
+                                  ? itemHeight
+                                  : rows * itemHeight +
+                                      math.max(0, rows - 1) * _runSpacing;
 
                               return Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   Expanded(
-                                    child: SingleChildScrollView(
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(bottom: 24),
-                                        child: Wrap(
-                                          spacing: _gridSpacing,
-                                          runSpacing: _runSpacing,
-                                          alignment: WrapAlignment.start,
-                                          runAlignment: WrapAlignment.start,
-                                          children: [
-                                            for (int i = 0; i < _icons.length; i++)
-                                              SizedBox(
-                                                width: itemWidth,
-                                                child: _buildDraggableIcon(
-                                                  index: i,
-                                                  itemWidth: itemWidth,
-                                                ),
-                                              ),
-                                            if (_draggingIcon != null)
-                                              SizedBox(
-                                                width: itemWidth,
-                                                child: _buildTrailingDropTarget(itemWidth),
-                                              ),
-                                          ],
+=======
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _maxContentWidth),
+                child: AnimatedPadding(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOut,
+                  padding: EdgeInsets.fromLTRB(
+                    20,
+                    contentTopPadding,
+                    20,
+                    safeBottom + 48,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final double width = constraints.maxWidth;
+                            final int columns = _columnCountForWidth(width);
+                            final double itemWidth =
+                                (width - _gridSpacing * (columns - 1)) / columns;
+                            final double itemHeight = itemWidth + 52;
+                            final int slotCount =
+                                _icons.length + (_draggingIcon != null ? 1 : 0);
+                            final int rows = slotCount == 0
+                                ? 0
+                                : ((slotCount - 1) ~/ columns) + 1;
+                            final double gridHeight = rows == 0
+                                ? itemHeight
+                                : rows * itemHeight +
+                                    math.max(0, rows - 1) * _runSpacing;
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Expanded(
+                                  child: SingleChildScrollView(
+                                    padding: const EdgeInsets.only(bottom: 24),
+                                    child: SizedBox(
+                                      height: gridHeight,
+                                      child: Stack(
+                                        clipBehavior: Clip.none,
+                                        children: _buildPositionedIcons(
+                                          columns: columns,
+                                          itemWidth: itemWidth,
+                                          itemHeight: itemHeight,
                                         ),
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(height: 12),
-                                  const _HomeIndicator(),
-                                ],
-                              );
-                            },
-                          ),
+                                ),
+                                const SizedBox(height: 24),
+                                const _Dock(),
+                                const SizedBox(height: 16),
+                                const _HomeIndicator(),
+                              ],
+                            );
+                          },
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
+              ),
+            ),
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOut,
+              top: doneTop,
+              right: 20,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: _isEditing
+                    ? _DoneButton(onPressed: _handleDonePressed)
+                    : const SizedBox.shrink(),
               ),
             ),
           ],
@@ -579,11 +763,13 @@ class AppleIconBody extends StatelessWidget {
 class _DropPlaceholder extends StatelessWidget {
   const _DropPlaceholder({
     required this.size,
+    required this.height,
     required this.isActive,
     required this.isVisible,
   });
 
   final double size;
+  final double height;
   final bool isActive;
   final bool isVisible;
 
@@ -598,7 +784,7 @@ class _DropPlaceholder extends StatelessWidget {
       duration: const Duration(milliseconds: 150),
       opacity: isActive ? 1 : 0.75,
       child: SizedBox(
-        height: size + 40,
+        height: height,
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(radius),
@@ -692,224 +878,126 @@ class _DragFeedback extends StatelessWidget {
   }
 }
 
-class _StatusBar extends StatefulWidget {
-  const _StatusBar();
-
-  @override
-  State<_StatusBar> createState() => _StatusBarState();
-}
-
-class _StatusBarState extends State<_StatusBar> {
-  late DateTime _now;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _now = DateTime.now();
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) {
-      setState(() {
-        _now = DateTime.now();
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  String _formatTime() {
-    final TimeOfDay timeOfDay = TimeOfDay.fromDateTime(_now);
-    final String hour = timeOfDay.hour.toString().padLeft(2, '0');
-    final String minute = timeOfDay.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(
-          _formatTime(),
-          style: const TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-            letterSpacing: -0.5,
-          ),
-        ),
-        const Spacer(),
-        const _SignalStrengthIcon(),
-        const SizedBox(width: 6),
-        const _WifiIcon(),
-        const SizedBox(width: 6),
-        const _BatteryIcon(),
-      ],
-    );
-  }
-}
-
-class _SignalStrengthIcon extends StatelessWidget {
-  const _SignalStrengthIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 22,
-      height: 12,
-      child: CustomPaint(
-        painter: _SignalStrengthPainter(),
-      ),
-    );
-  }
-}
-
-class _SignalStrengthPainter extends CustomPainter {
-  const _SignalStrengthPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    final double barWidth = size.width / 9;
-    final double gap = barWidth * 0.9;
-    for (int i = 0; i < 4; i++) {
-      final double heightFactor = (i + 1) / 4;
-      final double barHeight = size.height * heightFactor;
-      final double dx = i * (barWidth + gap);
-      final Rect rect = Rect.fromLTWH(
-        dx,
-        size.height - barHeight,
-        barWidth,
-        barHeight,
-      );
-      final RRect rRect = RRect.fromRectAndRadius(rect, const Radius.circular(1.5));
-      canvas.drawRRect(rRect, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _WifiIcon extends StatelessWidget {
-  const _WifiIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 18,
-      height: 12,
-      child: CustomPaint(
-        painter: _WifiPainter(),
-      ),
-    );
-  }
-}
-
-class _WifiPainter extends CustomPainter {
-  const _WifiPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..strokeCap = StrokeCap.round;
-
-    final Offset center = Offset(size.width / 2, size.height);
-    for (int i = 0; i < 3; i++) {
-      final double factor = (i + 1) / 3;
-      final double radius = size.width / 2 * factor;
-      final Rect rect = Rect.fromCircle(center: center, radius: radius);
-      final Path path = Path()
-        ..addArc(rect, math.pi, math.pi);
-      canvas.drawPath(path, paint);
-    }
-
-    final Paint dotPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(center, 1.6, dotPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _BatteryIcon extends StatelessWidget {
-  const _BatteryIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 26,
-      height: 12,
-      child: CustomPaint(
-        painter: _BatteryPainter(),
-      ),
-    );
-  }
-}
-
-class _BatteryPainter extends CustomPainter {
-  const _BatteryPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double bodyWidth = size.width - 3;
-    final Rect bodyRect = Rect.fromLTWH(0, 0, bodyWidth, size.height);
-    final RRect body = RRect.fromRectAndRadius(bodyRect, const Radius.circular(2.5));
-
-    final Paint outlinePaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4;
-    canvas.drawRRect(body, outlinePaint);
-
-    final double levelPadding = 2.2;
-    final Rect levelRect = Rect.fromLTWH(
-      levelPadding,
-      levelPadding,
-      bodyWidth - levelPadding * 2,
-      size.height - levelPadding * 2,
-    );
-    final RRect level = RRect.fromRectAndRadius(levelRect, const Radius.circular(1.6));
-    final Paint levelPaint = Paint()
-      ..shader = const LinearGradient(
-        colors: [Color(0xFF4CD964), Color(0xFF2ECC71)],
-      ).createShader(levelRect);
-    canvas.drawRRect(level, levelPaint);
-
-    final Rect capRect = Rect.fromLTWH(bodyWidth + 0.6, size.height / 2 - 2, 2.4, 4);
-    final RRect cap = RRect.fromRectAndRadius(capRect, const Radius.circular(1));
-    final Paint capPaint = Paint()..color = Colors.white;
-    canvas.drawRRect(cap, capPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
 class _HomeIndicator extends StatelessWidget {
   const _HomeIndicator();
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: Container(
-        width: 134,
-        height: 5,
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.55),
-          borderRadius: BorderRadius.circular(3),
+    return const SizedBox.shrink();
+  }
+}
+
+class _Dock extends StatelessWidget {
+  const _Dock();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(30),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.22),
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.28),
+                width: 1.2,
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: const [
+                _DockIcon(
+                  icon: CupertinoIcons.phone_fill,
+                  label: 'Phone',
+                  colors: [Color(0xFF39D87E), Color(0xFF28B865)],
+                ),
+                _DockIcon(
+                  icon: CupertinoIcons.chat_bubble_2_fill,
+                  label: 'Messages',
+                  colors: [Color(0xFF7CD1FF), Color(0xFF3AA8F2)],
+                ),
+                _DockIcon(
+                  icon: CupertinoIcons.compass_fill,
+                  label: 'Safari',
+                  colors: [Color(0xFF66B8FF), Color(0xFF0A7AFF)],
+                ),
+                _DockIcon(
+                  icon: CupertinoIcons.music_note_2,
+                  label: 'Music',
+                  colors: [Color(0xFFFF7A7A), Color(0xFFFA2C55)],
+                ),
+              ],
+            ),
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _DockIcon extends StatelessWidget {
+  const _DockIcon({
+    required this.icon,
+    required this.label,
+    required this.colors,
+  });
+
+  final IconData icon;
+  final String label;
+  final List<Color> colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 64,
+          height: 64,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: colors,
+            ),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.18),
+                blurRadius: 18,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          child: Icon(
+            icon,
+            size: 30,
+            color: Colors.white,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            shadows: [
+              Shadow(
+                color: Colors.black45,
+                offset: Offset(0, 1),
+                blurRadius: 6,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
