@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -35,13 +37,32 @@ class AppleIconSortPage extends StatefulWidget {
 class _AppleIconSortPageState extends State<AppleIconSortPage> {
   static const double _gridSpacing = 26;
   static const double _runSpacing = 32;
-  static const double _maxContentWidth = 760;
+  static const double _iconTileSize = 72;
+  static const double _designWidth = 390;
+  static const double _designHeight = 844;
+  static const double _designSafeTop = 47;
+  static const double _designSafeBottom = 34;
 
   final List<AppIconData> _icons = List.of(_defaultIcons);
   bool _isEditing = false;
   AppIconData? _draggingIcon;
   int? _dragStartIndex;
   int? _hoverSlot;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleSystemUiUpdate();
+  }
+
+  @override
+  void dispose() {
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
+    super.dispose();
+  }
 
   void _handleDragStart(int index) {
     final AppIconData icon = _icons[index];
@@ -52,6 +73,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _dragStartIndex = index;
       _hoverSlot = index;
     });
+    _scheduleSystemUiUpdate();
   }
 
   void _handleDragEnd({required bool wasAccepted}) {
@@ -69,6 +91,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _dragStartIndex = null;
       _hoverSlot = null;
     });
+    _scheduleSystemUiUpdate();
   }
 
   void _handleDelete(AppIconData icon) {
@@ -83,6 +106,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
         _dragStartIndex = null;
       }
     });
+    _scheduleSystemUiUpdate();
   }
 
   void _handleDonePressed() {
@@ -92,22 +116,35 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _hoverSlot = null;
       _dragStartIndex = null;
     });
+    _scheduleSystemUiUpdate();
   }
 
-  int _columnCountForWidth(double width) {
-    if (width >= 1100) {
-      return 6;
+  void _scheduleSystemUiUpdate() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: _isEditing
+            ? const [SystemUiOverlay.bottom]
+            : SystemUiOverlay.values,
+      );
+    });
+  }
+
+  int _columnCountForWidth(
+    double width,
+    double tileSize,
+    double spacing,
+  ) {
+    if (width <= 0) {
+      return 1;
     }
-    if (width >= 900) {
-      return 5;
-    }
-    if (width >= 600) {
-      return 4;
-    }
-    if (width >= 360) {
-      return 4;
-    }
-    return 3;
+    final double totalCellWidth = tileSize + spacing;
+    final int estimate =
+        math.max(1, ((width + spacing) / totalCellWidth).floor());
+    return estimate.clamp(2, 6);
   }
 
   void _updateDragPosition(AppIconData icon, int slot) {
@@ -147,9 +184,93 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
     });
   }
 
+  List<Widget> _buildPositionedIcons({
+    required int columns,
+    required double itemWidth,
+    required double itemHeight,
+    required double gridSpacing,
+    required double runSpacing,
+    required double horizontalInset,
+  }) {
+    final List<Widget> widgets = <Widget>[];
+    for (int index = 0; index < _icons.length; index++) {
+      final AppIconData icon = _icons[index];
+      final Offset offset = _slotOffset(
+        slot: index,
+        columns: columns,
+        itemWidth: itemWidth,
+        itemHeight: itemHeight,
+        gridSpacing: gridSpacing,
+        runSpacing: runSpacing,
+        horizontalInset: horizontalInset,
+      );
+      widgets.add(
+        AnimatedPositioned(
+          key: ValueKey(icon.label),
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          left: offset.dx,
+          top: offset.dy,
+          width: itemWidth,
+          height: itemHeight,
+          child: _buildDraggableIcon(
+            index: index,
+            itemWidth: itemWidth,
+            itemHeight: itemHeight,
+          ),
+        ),
+      );
+    }
+
+    if (_draggingIcon != null) {
+      final Offset offset = _slotOffset(
+        slot: _icons.length,
+        columns: columns,
+        itemWidth: itemWidth,
+        itemHeight: itemHeight,
+        gridSpacing: gridSpacing,
+        runSpacing: runSpacing,
+        horizontalInset: horizontalInset,
+      );
+      widgets.add(
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+          left: offset.dx,
+          top: offset.dy,
+          width: itemWidth,
+          height: itemHeight,
+          child: _buildTrailingDropTarget(
+            itemWidth: itemWidth,
+            itemHeight: itemHeight,
+          ),
+        ),
+      );
+    }
+
+    return widgets;
+  }
+
+  Offset _slotOffset({
+    required int slot,
+    required int columns,
+    required double itemWidth,
+    required double itemHeight,
+    required double gridSpacing,
+    required double runSpacing,
+    required double horizontalInset,
+  }) {
+    final int row = slot ~/ columns;
+    final int column = slot % columns;
+    final double dx = horizontalInset + column * (itemWidth + gridSpacing);
+    final double dy = row * (itemHeight + runSpacing);
+    return Offset(dx, dy);
+  }
+
   Widget _buildDraggableIcon({
     required int index,
     required double itemWidth,
+    required double itemHeight,
   }) {
     final AppIconData icon = _icons[index];
     final bool isDragging = identical(_draggingIcon, icon);
@@ -180,35 +301,43 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       },
       builder: (context, candidateData, rejectedData) {
         final bool showHighlight = isHighlighted || candidateData.isNotEmpty;
-        return LongPressDraggable<AppIconData>(
-          data: icon,
-          dragAnchorStrategy: pointerDragAnchorStrategy,
-          feedback: _DragFeedback(icon: icon, size: itemWidth),
-          onDragStarted: () => _handleDragStart(index),
-          onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
-          childWhenDragging: _DropPlaceholder(
-            size: itemWidth,
-            isActive: showHighlight,
-            isVisible: true,
-          ),
-          child: AppleIconTile(
-            key: ValueKey(icon.label),
-            icon: icon,
-            isActive: isDragging,
-            isEditing: _isEditing,
-            isHighlighted: showHighlight,
-            onDelete: () => _handleDelete(icon),
-            size: itemWidth,
+        return SizedBox(
+          height: itemHeight,
+          child: LongPressDraggable<AppIconData>(
+            data: icon,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            feedback: _DragFeedback(icon: icon, size: itemWidth),
+            onDragStarted: () => _handleDragStart(index),
+            onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
+            childWhenDragging: _DropPlaceholder(
+              size: itemWidth,
+              height: itemHeight,
+              isActive: showHighlight,
+              isVisible: true,
+            ),
+            child: AppleIconTile(
+              key: ValueKey(icon.label),
+              icon: icon,
+              isActive: isDragging,
+              isEditing: _isEditing,
+              isHighlighted: showHighlight,
+              onDelete: () => _handleDelete(icon),
+              size: itemWidth,
+            ),
           ),
         );
       },
     );
   }
 
-  Widget _buildTrailingDropTarget(double itemWidth) {
+  Widget _buildTrailingDropTarget({
+    required double itemWidth,
+    required double itemHeight,
+  }) {
     final bool isActive = _hoverSlot == _icons.length && _draggingIcon != null;
     return SizedBox(
       width: itemWidth,
+      height: itemHeight,
       child: DragTarget<AppIconData>(
         onWillAccept: (data) => data != null,
         onMove: (details) {
@@ -232,6 +361,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
           final bool shouldShow = _draggingIcon != null || candidateData.isNotEmpty;
           return _DropPlaceholder(
             size: itemWidth,
+            height: itemHeight,
             isActive: isActive || candidateData.isNotEmpty,
             isVisible: shouldShow,
           );
@@ -242,128 +372,205 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
 
   @override
   Widget build(BuildContext context) {
+    final MediaQueryData mediaQuery = MediaQuery.of(context);
     return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF158A80),
-              Color(0xFF072F2C),
-              Color(0xFF010C0B),
-            ],
-            stops: [0, 0.5, 1],
-          ),
-        ),
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Colors.white.withOpacity(0.05),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: Alignment.center,
-                    radius: 0.9,
-                    colors: [
-                      const Color(0xFF158A80).withOpacity(0.08),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            SafeArea(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: _maxContentWidth),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const _StatusBar(),
-                        const SizedBox(height: 28),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 200),
-                              child: _isEditing
-                                  ? _DoneButton(onPressed: _handleDonePressed)
-                                  : const SizedBox(width: 62),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Expanded(
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              final double width = constraints.maxWidth;
-                              final int columns = _columnCountForWidth(width);
-                              final double itemWidth =
-                                  (width - _gridSpacing * (columns - 1)) / columns;
+      backgroundColor: Colors.black,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final double widthScale = constraints.maxWidth / _designWidth;
+          final double heightScale = constraints.maxHeight / _designHeight;
+          final double scale = math.min(1.0, math.min(widthScale, heightScale));
+          final double phoneWidth = _designWidth * scale;
+          final double phoneHeight = _designHeight * scale;
+          final double safeTop = _designSafeTop * scale;
+          final double safeBottom = _designSafeBottom * scale;
 
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Expanded(
-                                    child: SingleChildScrollView(
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(bottom: 24),
-                                        child: Wrap(
-                                          spacing: _gridSpacing,
-                                          runSpacing: _runSpacing,
-                                          alignment: WrapAlignment.start,
-                                          runAlignment: WrapAlignment.start,
-                                          children: [
-                                            for (int i = 0; i < _icons.length; i++)
-                                              SizedBox(
-                                                width: itemWidth,
-                                                child: _buildDraggableIcon(
-                                                  index: i,
-                                                  itemWidth: itemWidth,
-                                                ),
-                                              ),
-                                            if (_draggingIcon != null)
-                                              SizedBox(
-                                                width: itemWidth,
-                                                child: _buildTrailingDropTarget(itemWidth),
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
+          return Center(
+            child: SizedBox(
+              width: phoneWidth,
+              height: phoneHeight,
+              child: MediaQuery(
+                data: mediaQuery.copyWith(
+                  size: Size(phoneWidth, phoneHeight),
+                  padding: EdgeInsets.only(
+                    top: safeTop,
+                    bottom: safeBottom,
+                  ),
+                ),
+                child: _buildHomeSurface(
+                  safeTop: safeTop,
+                  safeBottom: safeBottom,
+                  scale: scale,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildHomeSurface({
+    required double safeTop,
+    required double safeBottom,
+    required double scale,
+  }) {
+    final double horizontalPadding = 12 * scale;
+    final double gridSpacing = _gridSpacing * scale;
+    final double runSpacing = _runSpacing * scale;
+    final double tileSize = _iconTileSize * scale;
+    final double labelHeight = 48 * scale;
+    final double contentTopPadding =
+        _isEditing ? 68 * scale : safeTop + 36 * scale;
+    final double contentBottomPadding = safeBottom + 24 * scale;
+    final double doneTop = _isEditing ? 14 * scale : safeTop + 14 * scale;
+    final double scrollPadding = 20 * scale;
+    final double dockSpacing = 14 * scale;
+    final double indicatorSpacing = 8 * scale;
+
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF158A80),
+            Color(0xFF072F2C),
+            Color(0xFF010C0B),
+          ],
+          stops: [0, 0.5, 1],
+        ),
+      ),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.white.withOpacity(0.05),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment.center,
+                  radius: 0.9,
+                  colors: [
+                    const Color(0xFF158A80).withOpacity(0.08),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+            ),
+          ),
+          AnimatedPadding(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOut,
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              contentTopPadding,
+              horizontalPadding,
+              contentBottomPadding,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final double availableWidth = constraints.maxWidth;
+                      final int columns = _columnCountForWidth(
+                        availableWidth,
+                        tileSize,
+                        gridSpacing,
+                      );
+                      final double itemWidth = math.min(
+                        tileSize,
+                        (availableWidth - gridSpacing * (columns - 1)) / columns,
+                      );
+                      final double itemHeight = itemWidth + labelHeight;
+                      final int slotCount =
+                          _icons.length + (_draggingIcon != null ? 1 : 0);
+                      final int rows = slotCount == 0
+                          ? 0
+                          : ((slotCount - 1) ~/ columns) + 1;
+                      final double gridHeight = rows == 0
+                          ? itemHeight
+                          : rows * itemHeight +
+                              math.max(0, rows - 1) * runSpacing;
+                      final double gridWidth = columns * itemWidth +
+                          math.max(0, columns - 1) * gridSpacing;
+                      final double horizontalInset =
+                          math.max(0, (availableWidth - gridWidth) / 2);
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: SingleChildScrollView(
+                              padding: EdgeInsets.only(bottom: scrollPadding),
+                              child: SizedBox(
+                                height: gridHeight,
+                                child: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: _buildPositionedIcons(
+                                    columns: columns,
+                                    itemWidth: itemWidth,
+                                    itemHeight: itemHeight,
+                                    gridSpacing: gridSpacing,
+                                    runSpacing: runSpacing,
+                                    horizontalInset: horizontalInset,
                                   ),
-                                  const SizedBox(height: 12),
-                                  const _HomeIndicator(),
-                                ],
-                              );
-                            },
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
-                      ],
+                          SizedBox(height: dockSpacing),
+                          _Dock(scale: scale),
+                          SizedBox(height: indicatorSpacing),
+                          _HomeIndicator(scale: scale),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              ignoring: !_isEditing,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 200),
+                opacity: _isEditing ? 1 : 0,
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    right: 20 * scale,
+                    top: doneTop,
+                  ),
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: _DoneButton(
+                      onPressed: _handleDonePressed,
+                      scale: scale,
                     ),
                   ),
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -558,11 +765,13 @@ class AppleIconBody extends StatelessWidget {
           textAlign: TextAlign.center,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
+          style: TextStyle(
             color: Colors.white,
-            fontSize: 12,
+            fontSize: 12 *
+                (size / _AppleIconSortPageState._iconTileSize)
+                    .clamp(0.8, 1.0),
             fontWeight: FontWeight.w600,
-            shadows: [
+            shadows: const [
               Shadow(
                 color: Colors.black54,
                 offset: Offset(0, 1),
@@ -579,11 +788,13 @@ class AppleIconBody extends StatelessWidget {
 class _DropPlaceholder extends StatelessWidget {
   const _DropPlaceholder({
     required this.size,
+    required this.height,
     required this.isActive,
     required this.isVisible,
   });
 
   final double size;
+  final double height;
   final bool isActive;
   final bool isVisible;
 
@@ -598,7 +809,7 @@ class _DropPlaceholder extends StatelessWidget {
       duration: const Duration(milliseconds: 150),
       opacity: isActive ? 1 : 0.75,
       child: SizedBox(
-        height: size + 40,
+        height: height,
         child: DecoratedBox(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(radius),
@@ -646,20 +857,31 @@ class _DeleteButton extends StatelessWidget {
 }
 
 class _DoneButton extends StatelessWidget {
-  const _DoneButton({required this.onPressed});
+  const _DoneButton({required this.onPressed, required this.scale});
 
   final VoidCallback onPressed;
+  final double scale;
 
   @override
   Widget build(BuildContext context) {
+    final EdgeInsets padding = EdgeInsets.symmetric(
+      horizontal: 18 * scale,
+      vertical: 10 * scale,
+    );
+    final TextStyle textStyle = TextStyle(
+      fontSize: 16 * scale,
+      fontWeight: FontWeight.w700,
+    );
+
     return TextButton(
       key: const ValueKey('done_button'),
       style: TextButton.styleFrom(
         backgroundColor: const Color.fromRGBO(180, 180, 180, 0.6),
         foregroundColor: Colors.black,
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        padding: padding,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         shape: const StadiumBorder(),
-        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        textStyle: textStyle,
       ),
       onPressed: onPressed,
       child: const Text('Done'),
@@ -692,224 +914,155 @@ class _DragFeedback extends StatelessWidget {
   }
 }
 
-class _StatusBar extends StatefulWidget {
-  const _StatusBar();
-
-  @override
-  State<_StatusBar> createState() => _StatusBarState();
-}
-
-class _StatusBarState extends State<_StatusBar> {
-  late DateTime _now;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _now = DateTime.now();
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) {
-      setState(() {
-        _now = DateTime.now();
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  String _formatTime() {
-    final TimeOfDay timeOfDay = TimeOfDay.fromDateTime(_now);
-    final String hour = timeOfDay.hour.toString().padLeft(2, '0');
-    final String minute = timeOfDay.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(
-          _formatTime(),
-          style: const TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-            letterSpacing: -0.5,
-          ),
-        ),
-        const Spacer(),
-        const _SignalStrengthIcon(),
-        const SizedBox(width: 6),
-        const _WifiIcon(),
-        const SizedBox(width: 6),
-        const _BatteryIcon(),
-      ],
-    );
-  }
-}
-
-class _SignalStrengthIcon extends StatelessWidget {
-  const _SignalStrengthIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 22,
-      height: 12,
-      child: CustomPaint(
-        painter: _SignalStrengthPainter(),
-      ),
-    );
-  }
-}
-
-class _SignalStrengthPainter extends CustomPainter {
-  const _SignalStrengthPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    final double barWidth = size.width / 9;
-    final double gap = barWidth * 0.9;
-    for (int i = 0; i < 4; i++) {
-      final double heightFactor = (i + 1) / 4;
-      final double barHeight = size.height * heightFactor;
-      final double dx = i * (barWidth + gap);
-      final Rect rect = Rect.fromLTWH(
-        dx,
-        size.height - barHeight,
-        barWidth,
-        barHeight,
-      );
-      final RRect rRect = RRect.fromRectAndRadius(rect, const Radius.circular(1.5));
-      canvas.drawRRect(rRect, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _WifiIcon extends StatelessWidget {
-  const _WifiIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 18,
-      height: 12,
-      child: CustomPaint(
-        painter: _WifiPainter(),
-      ),
-    );
-  }
-}
-
-class _WifiPainter extends CustomPainter {
-  const _WifiPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Paint paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..strokeCap = StrokeCap.round;
-
-    final Offset center = Offset(size.width / 2, size.height);
-    for (int i = 0; i < 3; i++) {
-      final double factor = (i + 1) / 3;
-      final double radius = size.width / 2 * factor;
-      final Rect rect = Rect.fromCircle(center: center, radius: radius);
-      final Path path = Path()
-        ..addArc(rect, math.pi, math.pi);
-      canvas.drawPath(path, paint);
-    }
-
-    final Paint dotPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(center, 1.6, dotPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _BatteryIcon extends StatelessWidget {
-  const _BatteryIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox(
-      width: 26,
-      height: 12,
-      child: CustomPaint(
-        painter: _BatteryPainter(),
-      ),
-    );
-  }
-}
-
-class _BatteryPainter extends CustomPainter {
-  const _BatteryPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double bodyWidth = size.width - 3;
-    final Rect bodyRect = Rect.fromLTWH(0, 0, bodyWidth, size.height);
-    final RRect body = RRect.fromRectAndRadius(bodyRect, const Radius.circular(2.5));
-
-    final Paint outlinePaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4;
-    canvas.drawRRect(body, outlinePaint);
-
-    final double levelPadding = 2.2;
-    final Rect levelRect = Rect.fromLTWH(
-      levelPadding,
-      levelPadding,
-      bodyWidth - levelPadding * 2,
-      size.height - levelPadding * 2,
-    );
-    final RRect level = RRect.fromRectAndRadius(levelRect, const Radius.circular(1.6));
-    final Paint levelPaint = Paint()
-      ..shader = const LinearGradient(
-        colors: [Color(0xFF4CD964), Color(0xFF2ECC71)],
-      ).createShader(levelRect);
-    canvas.drawRRect(level, levelPaint);
-
-    final Rect capRect = Rect.fromLTWH(bodyWidth + 0.6, size.height / 2 - 2, 2.4, 4);
-    final RRect cap = RRect.fromRectAndRadius(capRect, const Radius.circular(1));
-    final Paint capPaint = Paint()..color = Colors.white;
-    canvas.drawRRect(cap, capPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
 class _HomeIndicator extends StatelessWidget {
-  const _HomeIndicator();
+  const _HomeIndicator({required this.scale});
+
+  final double scale;
 
   @override
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.bottomCenter,
       child: Container(
-        width: 134,
-        height: 5,
+        width: 134 * scale,
+        height: 5 * scale,
         decoration: BoxDecoration(
           color: Colors.white.withOpacity(0.55),
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(3 * scale),
         ),
       ),
+    );
+  }
+}
+
+class _Dock extends StatelessWidget {
+  const _Dock({required this.scale});
+
+  final double scale;
+
+  @override
+  Widget build(BuildContext context) {
+    final double radius = 32 * scale;
+    final double horizontalPadding = 18 * scale;
+    final double verticalPadding = 12 * scale;
+    final double blurSigma = 24 * scale;
+
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 10 * scale),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: horizontalPadding,
+              vertical: verticalPadding,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.22),
+              borderRadius: BorderRadius.circular(radius),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _DockIcon(
+                  scale: scale,
+                  icon: CupertinoIcons.phone_fill,
+                  label: 'Phone',
+                  colors: const [Color(0xFF39D87E), Color(0xFF28B865)],
+                ),
+                _DockIcon(
+                  scale: scale,
+                  icon: CupertinoIcons.chat_bubble_2_fill,
+                  label: 'Messages',
+                  colors: const [Color(0xFF7CD1FF), Color(0xFF3AA8F2)],
+                ),
+                _DockIcon(
+                  scale: scale,
+                  icon: CupertinoIcons.compass_fill,
+                  label: 'Safari',
+                  colors: const [Color(0xFF66B8FF), Color(0xFF0A7AFF)],
+                ),
+                _DockIcon(
+                  scale: scale,
+                  icon: CupertinoIcons.music_note_2,
+                  label: 'Music',
+                  colors: const [Color(0xFFFF7A7A), Color(0xFFFA2C55)],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DockIcon extends StatelessWidget {
+  const _DockIcon({
+    required this.icon,
+    required this.label,
+    required this.colors,
+    required this.scale,
+  });
+
+  final IconData icon;
+  final String label;
+  final List<Color> colors;
+  final double scale;
+
+  @override
+  Widget build(BuildContext context) {
+    final double size = 66 * scale;
+    final double iconSize = 30 * scale;
+    final double radius = 20 * scale;
+    final double spacing = 6 * scale;
+    final double labelFontSize = math.max(9, 12 * scale);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: colors,
+            ),
+            borderRadius: BorderRadius.circular(radius),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.18),
+                blurRadius: 18 * scale,
+                offset: Offset(0, 12 * scale),
+              ),
+            ],
+          ),
+          child: Icon(
+            icon,
+            size: iconSize,
+            color: Colors.white,
+          ),
+        ),
+        SizedBox(height: spacing),
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: labelFontSize,
+            fontWeight: FontWeight.w600,
+            shadows: const [
+              Shadow(
+                color: Colors.black45,
+                offset: Offset(0, 1),
+                blurRadius: 6,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
