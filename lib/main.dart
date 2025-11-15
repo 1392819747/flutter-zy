@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -33,18 +34,15 @@ class AppleIconSortPage extends StatefulWidget {
 }
 
 class _AppleIconSortPageState extends State<AppleIconSortPage> {
-  static const double _gridSpacing = 30; // 增加间距使图标更小，但保持数量不变
+  static const double _gridSpacing = 18; // 缩小行间距，在保持图标大小的同时容纳更多行
+  static const double _iconVisualScale = 0.88; // 控制图标相对于单元格的大小
   static const int _iconsPerPage = 24; // 每页最多24个图标 (4x6) - 保持原数量
 
   late List<List<AppIconData>> _pages = _initializePages();
 
   List<List<AppIconData>> _initializePages() {
     // 获取非Dock栏图标
-    final List<AppIconData> nonDockIcons = _defaultIcons
-        .where((a) => !{
-            'Instagram', 'Twitter', 'WhatsApp', 'YouTube'
-          }.contains(a.label))
-        .toList();
+    final List<AppIconData> nonDockIcons = List.of(_defaultIcons);
 
     // 将Gmail单独提取出来
     AppIconData? gmailIcon;
@@ -84,17 +82,44 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   }
 
   late List<AppIconData> _dockIcons = [
-    for (final a in _defaultIcons)
-      if ({'Instagram', 'Twitter', 'WhatsApp', 'YouTube'}.contains(a.label)) a,
+    const AppIconData(
+      label: 'Phone',
+      iconData: CupertinoIcons.phone_fill,
+      backgroundColor: Color(0xFF34C759),
+      iconColor: Colors.white,
+    ),
+    const AppIconData(
+      label: 'Messages',
+      iconData: CupertinoIcons.chat_bubble_text_fill,
+      backgroundColor: Color(0xFF32D74B),
+      iconColor: Colors.white,
+    ),
+    const AppIconData(
+      label: 'Safari',
+      iconData: CupertinoIcons.compass_fill,
+      backgroundColor: Color(0xFF0A84FF),
+      iconColor: Colors.white,
+    ),
+    const AppIconData(
+      label: 'Music',
+      iconData: CupertinoIcons.music_note_2,
+      backgroundColor: Color(0xFFFF2D55),
+      iconColor: Colors.white,
+    ),
   ];
   bool _isEditing = false;
   AppIconData? _draggingIcon;
   int? _dragStartIndex;
   int? _hoverSlot;
+  int? _hoverDockSlot;
+  final GlobalKey _dockKey = GlobalKey();
+  _DockDimensions? _latestDockDimensions;
   double _cachedStatusBarHeight = 0;
   bool _dragFromDock = false;
   int _currentPage = 0;
   final PageController _pageController = PageController();
+  Timer? _autoScrollTimer;
+  int? _pendingAutoScrollPage;
 
   // 获取当前页的图标
   List<AppIconData> get _currentIcons => _pages[_currentPage];
@@ -141,6 +166,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _draggingIcon = icon;
       _dragStartIndex = slot;
       _hoverSlot = null;
+      _hoverDockSlot = slot;
       _cachedStatusBarHeight = MediaQuery.of(context).viewPadding.top;
       _dragFromDock = true;
     });
@@ -150,6 +176,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   }
 
   void _handleDragEnd({required bool wasAccepted}) {
+    _cancelAutoScroll();
     setState(() {
       if (!wasAccepted && _draggingIcon != null && _dragStartIndex != null) {
         final AppIconData icon = _draggingIcon!;
@@ -173,6 +200,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _draggingIcon = null;
       _dragStartIndex = null;
       _hoverSlot = null;
+      _hoverDockSlot = null;
       _dragFromDock = false;
     });
   }
@@ -218,6 +246,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
         _draggingIcon = null;
         _hoverSlot = null;
         _dragStartIndex = null;
+        _hoverDockSlot = null;
       }
     });
     if (!_isEditing) {
@@ -226,10 +255,12 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   }
 
   void _handleDonePressed() {
+    _cancelAutoScroll();
     setState(() {
       _isEditing = false;
       _draggingIcon = null;
       _hoverSlot = null;
+      _hoverDockSlot = null;
       _dragStartIndex = null;
       // 重置状态栏高度缓存
       _cachedStatusBarHeight = 0;
@@ -273,15 +304,11 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
 
     // 如果图标不在任何页面中，说明是从 Dock 拖到桌面
     if (iconPageIndex == -1) {
-      setState(() {
-        // 从 Dock 拖到桌面，插入到当前页的中间位置
-        final int middleIndex = _currentIcons.length ~/ 2;
-        _pages[_currentPage].insert(middleIndex, icon);
-        _dockIcons.remove(icon);
-        _hoverSlot = middleIndex;
-        // 检查是否需要创建新页面
-        _checkAndCreatePageIfNeeded();
-      });
+      if (_hoverSlot != slot) {
+        setState(() {
+          _hoverSlot = math.min(slot, _currentIcons.length);
+        });
+      }
       return;
     }
 
@@ -359,13 +386,49 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
     }
   }
 
+  void _handleDropAccepted(AppIconData icon, int slot) {
+    setState(() {
+      if (!_currentIcons.contains(icon)) {
+        // 确保图标不再其他位置
+        for (final page in _pages) {
+          page.remove(icon);
+        }
+        _dockIcons.remove(icon);
+        final int insertIndex = math.min(slot, _currentIcons.length);
+        _pages[_currentPage].insert(insertIndex, icon);
+        _hoverSlot = insertIndex;
+        _checkAndCreatePageIfNeeded();
+      } else {
+        _hoverSlot = slot;
+      }
+      _hoverDockSlot = null;
+    });
+  }
+
+  void _handleDockDrop(AppIconData icon, int slot) {
+    setState(() {
+      for (final page in _pages) {
+        page.remove(icon);
+      }
+      final bool alreadyInDock = _dockIcons.contains(icon);
+      if (!alreadyInDock && _dockIcons.length >= 4) {
+        _hoverDockSlot = null;
+        return;
+      }
+      _dockIcons.remove(icon);
+      final int insertIndex = math.min(slot, _dockIcons.length);
+      _dockIcons.insert(insertIndex, icon);
+      _hoverDockSlot = null;
+    });
+  }
+
   Widget _buildDraggableIcon({
     required int index,
     required double itemWidth,
   }) {
     final AppIconData icon = _currentIcons[index];
     final bool isDragging = identical(_draggingIcon, icon);
-    final bool isHighlighted = _hoverSlot == index && _draggingIcon != null;
+    final double tileSize = itemWidth * _iconVisualScale;
 
     return DragTarget<AppIconData>(
       onWillAccept: (from) => from != null,
@@ -385,32 +448,33 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
           });
         }
       },
-      onAccept: (_) {
-        setState(() {
-          _hoverSlot = index;
-        });
+      onAccept: (data) {
+        if (data != null) {
+          _handleDropAccepted(data, index);
+        }
       },
       builder: (context, candidateData, rejectedData) {
-        final bool showHighlight = isHighlighted || candidateData.isNotEmpty;
         return LongPressDraggable<AppIconData>(
           data: icon,
           dragAnchorStrategy: pointerDragAnchorStrategy,
-          feedback: _DragFeedback(icon: icon, size: itemWidth),
+          feedback: _DragFeedback(icon: icon, size: tileSize),
           onDragStarted: () => _handleDragStart(context, index),
+          onDragUpdate: _handleDragUpdate,
           onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
-          childWhenDragging: _DropPlaceholder(
-            size: itemWidth,
-            isActive: showHighlight,
-            isVisible: true,
-          ),
-          child: AppleIconTile(
-            key: ValueKey(icon.label),
-            icon: icon,
-            isActive: isDragging,
-            isEditing: _isEditing,
-            isHighlighted: showHighlight,
-            onDelete: () => _handleDelete(icon),
-            size: itemWidth,
+          childWhenDragging: const SizedBox.shrink(),
+          child: SizedBox(
+            width: itemWidth,
+            child: Center(
+              child: AppleIconTile(
+                key: ValueKey(icon.label),
+                icon: icon,
+                isActive: isDragging,
+                isEditing: _isEditing,
+                isHighlighted: false,
+                onDelete: () => _handleDelete(icon),
+                size: tileSize,
+              ),
+            ),
           ),
         );
       },
@@ -419,6 +483,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
 
   Widget _buildTrailingDropTarget(double itemWidth) {
     final bool isActive = _hoverSlot == _currentIcons.length && _draggingIcon != null;
+    final double tileSize = itemWidth * _iconVisualScale;
     return SizedBox(
       width: itemWidth,
       child: DragTarget<AppIconData>(
@@ -435,125 +500,255 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
             });
           }
         },
-        onAccept: (_) {
-          setState(() {
-            _hoverSlot = _currentIcons.length;
-          });
+        onAccept: (data) {
+          if (data != null) {
+            _handleDropAccepted(data, _currentIcons.length);
+          }
         },
         builder: (context, candidateData, rejectedData) {
-          final bool shouldShow = _draggingIcon != null || candidateData.isNotEmpty;
-          return _DropPlaceholder(
-            size: itemWidth,
-            isActive: isActive || candidateData.isNotEmpty,
-            isVisible: shouldShow,
-          );
+          return SizedBox(height: itemWidth);
         },
       ),
     );
   }
 
-  Widget _buildDock(BuildContext context) {
-    final double screenWidth = MediaQuery.of(context).size.width;
+  _DockDimensions _calculateDockDimensions(BuildContext context) {
     const int columns = 4;
-    const double spacing = 25; // 增加间距使Dock图标更小，与主页面一致
-    const double horizontalPadding = 12;
-    // 计算可用宽度：屏幕宽度 - 左右外边距(36) - 左右内边距(24)
-    final double availableWidth = screenWidth - 36 - (horizontalPadding * 2);
-    final double itemWidth = (availableWidth - spacing * (columns - 1)) / columns;
-    
+    const double horizontalPadding = 18;
+    const double verticalPadding = 20;
+    const double spacing = _gridSpacing;
+
+    final Size size = MediaQuery.of(context).size;
+    final double outerWidth = size.width - 24; // 左右各12
+    final double availableWidth = outerWidth - (horizontalPadding * 2);
+    final double gridWidth = size.width - 36;
+    final double gridItemWidth = (gridWidth - spacing * (columns - 1)) / columns;
+    final double dockItemWidth = (availableWidth - spacing * (columns - 1)) / columns;
+    final double itemWidth = math.min(gridItemWidth, dockItemWidth);
+    final double contentWidth = itemWidth * columns + spacing * (columns - 1);
+    final double dockHeight = itemWidth + verticalPadding;
+
+    return _DockDimensions(
+      itemSize: itemWidth,
+      contentWidth: contentWidth,
+      height: dockHeight,
+      horizontalPadding: horizontalPadding,
+      verticalPadding: verticalPadding,
+      spacing: spacing,
+    );
+  }
+
+  Widget _buildDock(BuildContext context, _DockDimensions dims) {
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: 8),
-      height: itemWidth + 16,
+      key: _dockKey,
+      padding: EdgeInsets.symmetric(
+        horizontal: dims.horizontalPadding,
+        vertical: dims.verticalPadding * 0.5,
+      ),
+      height: dims.height,
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(34),
         border: Border.all(color: Colors.white.withOpacity(0.25), width: 1.5),
         boxShadow: [
           BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 30),
         ],
       ),
-      child: Stack(
-        children: [
-          // 放置4个 DragTarget 槽位
-          for (int i = 0; i < columns; i++)
-            Positioned(
-              left: i * (itemWidth + spacing),
-              top: 0,
-              width: itemWidth,
-              height: itemWidth,
-              child: DragTarget<AppIconData>(
-                onWillAccept: (data) {
-                  if (data == null) return false;
-                  // 如果 Dock 已满（4个），且拖入的不是 Dock 中已有的，则拒绝
-                  if (_dockIcons.length >= 4 && !_dockIcons.contains(data)) {
-                    return false;
-                  }
-                  return true;
-                },
-                onAccept: (data) {
-                  setState(() {
-                    _currentIcons.remove(data);
-                    if (_dockIcons.contains(data)) {
-                      _dockIcons.remove(data);
+      alignment: Alignment.center,
+      child: SizedBox(
+        width: dims.contentWidth,
+        height: dims.itemSize,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            for (int i = 0; i < 4; i++)
+              Positioned(
+                left: i * (dims.itemSize + dims.spacing),
+                top: 0,
+                width: dims.itemSize,
+                height: dims.itemSize,
+                child: DragTarget<AppIconData>(
+                  onWillAccept: (data) {
+                    if (data == null) return false;
+                    if (_dockIcons.length >= 4 && !_dockIcons.contains(data)) {
+                      return false;
                     }
-                    // 只有在 Dock 未满时才能插入新图标
-                    if (_dockIcons.length < 4) {
-                      if (i <= _dockIcons.length) {
-                        _dockIcons.insert(i, data);
-                      } else {
-                        _dockIcons.add(data);
-                      }
-                    } else {
-                      // Dock 已满，插入到指定位置
-                      if (i <= _dockIcons.length) {
-                        _dockIcons.insert(i, data);
-                      } else {
-                        _dockIcons.add(data);
-                      }
-                    }
-                  });
-                },
-                builder: (context, candidateData, rejectedData) {
-                  final bool hasIcon = i < _dockIcons.length;
-                  final bool active = candidateData.isNotEmpty;
-                  if (!hasIcon) {
-                    return _DropPlaceholder(size: itemWidth, isActive: active, isVisible: true);
-                  }
-                  // 如果有图标，显示占位符但保持透明
-                  return Container(
-                    width: itemWidth,
-                    height: itemWidth,
-                    color: Colors.transparent,
-                  );
-                },
+                    return true;
+                  },
+                  onAccept: (data) {
+                    _handleDockDrop(data, i);
+                  },
+                  builder: (context, candidateData, rejectedData) {
+                    return const SizedBox.shrink();
+                  },
+                ),
               ),
-            ),
-          // 使用 AnimatedPositioned 显示实际的图标
-          for (int i = 0; i < _dockIcons.length; i++)
-            AnimatedPositioned(
-              key: ValueKey(_dockIcons[i].label),
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeOutCubic,
-              left: i * (itemWidth + spacing),
-              top: 0,
-              width: itemWidth,
-              height: itemWidth,
-              child: _DockIconTile(
-                icon: _dockIcons[i],
-                isEditing: _isEditing,
-                size: itemWidth,
-                onDelete: () => _handleDeleteDock(_dockIcons[i]),
-                onDragStart: () => _handleDockDragStart(context, i),
-                onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
-              ),
-            ),
-        ],
+            ..._buildDockIconWidgets(dims),
+          ],
+        ),
       ),
     );
   }
 
+  List<Widget> _buildDockIconWidgets(_DockDimensions dims) {
+    final List<Widget> widgets = [];
+    final bool draggingDockIcon =
+        _dragFromDock && _draggingIcon != null && _dockIcons.contains(_draggingIcon);
+
+    final List<AppIconData> iconsToRender = [
+      for (final icon in _dockIcons)
+        if (!(draggingDockIcon && identical(icon, _draggingIcon))) icon,
+    ];
+
+    final int count = iconsToRender.length;
+    final double usedWidth =
+        count * dims.itemSize + math.max(0, count - 1) * dims.spacing;
+    final double start = math.max(0, (dims.contentWidth - usedWidth) / 2);
+
+    for (int displayIndex = 0; displayIndex < count; displayIndex++) {
+      final AppIconData icon = iconsToRender[displayIndex];
+      final int iconIndex = _dockIcons.indexOf(icon);
+      final double left = start + displayIndex * (dims.itemSize + dims.spacing);
+      widgets.add(
+        AnimatedPositioned(
+          key: ValueKey(icon.label),
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          left: left,
+          top: 0,
+          width: dims.itemSize,
+          height: dims.itemSize,
+          child: Center(
+            child: SizedBox(
+              width: dims.itemSize * _iconVisualScale,
+              height: dims.itemSize * _iconVisualScale,
+              child: _DockIconTile(
+                icon: icon,
+                isEditing: _isEditing,
+                size: dims.itemSize * _iconVisualScale,
+                onDelete: () => _handleDeleteDock(icon),
+                onDragStart: () => _handleDockDragStart(context, iconIndex),
+                onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
+                onDragUpdate: _handleDragUpdate,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return widgets;
+  }
+
+  Widget _buildPageIndicator() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        for (int i = 0; i < math.max(2, _pages.length); i++)
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _currentPage == i ? Colors.white : Colors.white.withOpacity(0.3),
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _handleDragUpdate(DragUpdateDetails details) {
+    final Size screenSize = MediaQuery.of(context).size;
+    const double edgeThreshold = 40;
+    final double dx = details.globalPosition.dx;
+    final int maxPageIndex = math.max(2, _pages.length) - 1;
+
+    if (dx <= edgeThreshold && _currentPage > 0) {
+      _scheduleAutoScroll(_currentPage - 1);
+    } else if (dx >= screenSize.width - edgeThreshold &&
+        _currentPage < maxPageIndex) {
+      _scheduleAutoScroll(_currentPage + 1);
+    } else {
+      _cancelAutoScroll();
+    }
+
+    _handleDockHover(details.globalPosition);
+  }
+
+  void _scheduleAutoScroll(int targetPage) {
+    if (_pendingAutoScrollPage == targetPage &&
+        _autoScrollTimer?.isActive == true) {
+      return;
+    }
+    _autoScrollTimer?.cancel();
+    _pendingAutoScrollPage = targetPage;
+    _autoScrollTimer = Timer(const Duration(seconds: 2), () {
+      if (!_pageController.hasClients) {
+        _cancelAutoScroll();
+        return;
+      }
+      _pageController.animateToPage(
+        targetPage,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+      _cancelAutoScroll();
+    });
+  }
+
+  void _cancelAutoScroll() {
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
+    _pendingAutoScrollPage = null;
+  }
+
+  void _handleDockHover(Offset globalPosition) {
+    final RenderBox? dockBox =
+        _dockKey.currentContext?.findRenderObject() as RenderBox?;
+    final _DockDimensions? dims = _latestDockDimensions;
+    if (dockBox == null || dims == null) {
+      return;
+    }
+    final Offset local = dockBox.globalToLocal(globalPosition);
+    const double verticalTolerance = 36;
+    final bool insideX = local.dx >= 0 && local.dx <= dockBox.size.width;
+    final bool insideY =
+        local.dy >= -verticalTolerance && local.dy <= dockBox.size.height + verticalTolerance;
+
+    if (!insideX || !insideY) {
+      if (_hoverDockSlot != null) {
+        setState(() {
+          _hoverDockSlot = null;
+        });
+      }
+      return;
+    }
+
+    final double slotWidth = dims.itemSize + dims.spacing;
+    int slot = (local.dx / slotWidth).floor();
+    slot = math.max(0, math.min(3, slot));
+
+    if (_hoverDockSlot != slot) {
+      setState(() {
+        _hoverDockSlot = slot;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _cancelAutoScroll();
+    _pageController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final _DockDimensions dockDimensions = _calculateDockDimensions(context);
+    _latestDockDimensions = dockDimensions;
+
     return MediaQuery.removePadding(
       context: context,
       removeTop: true,
@@ -576,58 +771,59 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                 ),
               ),
               child: Stack(
-          children: [
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Colors.white.withOpacity(0.05),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: Alignment.center,
-                    radius: 0.9,
-                    colors: [
-                      const Color(0xFF158A80).withOpacity(0.08),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            // 主内容区域 - 支持分页
-            Positioned(
-              left: 0,
-              right: 0,
-              top: _isEditing && _cachedStatusBarHeight > 0
-                  ? _cachedStatusBarHeight
-                  : MediaQuery.of(context).viewPadding.top,
-              bottom: 0,
-              child: Column(
                 children: [
-                  Expanded(
-                    child: PageView.builder(
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            Colors.white.withOpacity(0.05),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: RadialGradient(
+                          center: Alignment.center,
+                          radius: 0.9,
+                          colors: [
+                            const Color(0xFF158A80).withOpacity(0.08),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // 主内容区域 - 支持分页
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: _isEditing && _cachedStatusBarHeight > 0
+                        ? _cachedStatusBarHeight
+                        : MediaQuery.of(context).viewPadding.top,
+                    bottom: 0,
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: PageView.builder(
                       controller: _pageController,
-                      physics: _isEditing ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
+                      physics: const PageScrollPhysics(),
                       onPageChanged: (page) {
                         setState(() {
                           _currentPage = page;
+                          _hoverSlot = null;
                         });
                       },
                       itemCount: math.max(2, _pages.length), // 使用实际的分页数量，至少2页
                       itemBuilder: (context, pageIndex) {
                         return Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
                           child: LayoutBuilder(
                             builder: (context, constraints) {
                               final double width = constraints.maxWidth;
@@ -635,33 +831,57 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                               final double itemWidth =
                                   (width - _gridSpacing * (columns - 1)) / columns;
 
-                              final double cellHeight = itemWidth + 40;
+                              double cellHeight = itemWidth + 16;
+                              final int targetRows = (_iconsPerPage / columns).ceil();
+                              final double maxHeightForRows =
+                                  (constraints.maxHeight - (_gridSpacing * (targetRows - 1))) /
+                                      targetRows;
+                              cellHeight = math.min(cellHeight, maxHeightForRows);
                               // 获取当前页面的图标
                               final List<AppIconData> pageIcons = pageIndex < _pages.length
                                   ? _pages[pageIndex]
                                   : [];
+                              final bool isCurrentPage = pageIndex == _currentPage;
 
                               return Stack(
                                 clipBehavior: Clip.none,
                                 children: [
                                   for (int i = 0; i < pageIcons.length; i++)
                                     _AnimatedGridItem(
-                                      key: ValueKey(pageIcons[i].label),
+                                      key: ValueKey('${pageIndex}_${pageIcons[i].label}'),
                                       index: i,
                                       columns: columns,
                                       spacing: _gridSpacing,
                                       itemWidth: itemWidth,
                                       itemHeight: cellHeight,
-                                      child: _buildDraggableIcon(
-                                        index: i,
-                                        itemWidth: itemWidth,
-                                      ),
+                                      child: isCurrentPage
+                                          ? _buildDraggableIcon(
+                                              index: i,
+                                              itemWidth: itemWidth,
+                                            )
+                                          : IgnorePointer(
+                                              child: SizedBox(
+                                                width: itemWidth,
+                                                child: Center(
+                                                  child: AppleIconTile(
+                                                    key: ValueKey('static_${pageIndex}_${pageIcons[i].label}'),
+                                                    icon: pageIcons[i],
+                                                    isEditing: _isEditing,
+                                                    onDelete: () {},
+                                                    size: itemWidth * _iconVisualScale,
+                                                    isActive: false,
+                                                    isHighlighted: false,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
                                     ),
-                                  if (_draggingIcon != null &&
-                                      _hoverSlot != null)
+                                  if (isCurrentPage &&
+                                      _draggingIcon != null &&
+                                      pageIcons.length < _iconsPerPage)
                                     _AnimatedGridItem(
                                       key: const ValueKey('trailing_drop'),
-                                      index: _hoverSlot!,
+                                      index: pageIcons.length,
                                       columns: columns,
                                       spacing: _gridSpacing,
                                       itemWidth: itemWidth,
@@ -675,59 +895,86 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                         );
                       },
                     ),
-                  ),
-                  // 页面指示器 - 至少显示2页
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 100),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        for (int i = 0; i < math.max(2, _pages.length); i++)
-                            Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 4),
-                              width: 6,
-                              height: 6,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: _currentPage == i
-                                    ? Colors.white
-                                    : Colors.white.withOpacity(0.3),
-                              ),
-                            ),
-                        ],
                       ),
+                      const SizedBox(height: 40),
+                    ],
+                  ),
+                ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 28 + dockDimensions.height,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: Colors.white.withOpacity(0.25), width: 1),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withOpacity(0.18), blurRadius: 10),
+                    ],
+                  ),
+                  child: _buildPageIndicator(),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 12,
+              child: _buildDock(context, dockDimensions),
+            ),
+                  // Done 按钮 - 在编辑模式时显示在状态栏区域
+                  if (_isEditing)
+                    Positioned(
+                      top: 8,
+                      right: 18,
+                      child: _DoneButton(onPressed: _handleDonePressed),
                     ),
                 ],
               ),
             ),
-            Positioned(
-              left: 18,
-              right: 18,
-              bottom: 12.0,  // 使用图标标签的字体大小
-              child: _buildDock(context),
-            ),
-            // Done 按钮 - 在编辑模式时显示在状态栏区域
-            if (_isEditing)
-              Positioned(
-                top: 8,
-                right: 18,
-                child: _DoneButton(onPressed: _handleDonePressed),
-              ),
-              ],
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
     );
   }
 }
 
-class AppIconData {
-  const AppIconData({required this.assetPath, required this.label});
+class _DockDimensions {
+  const _DockDimensions({
+    required this.itemSize,
+    required this.contentWidth,
+    required this.height,
+    required this.horizontalPadding,
+    required this.verticalPadding,
+    required this.spacing,
+  });
 
-  final String assetPath;
+  final double itemSize;
+  final double contentWidth;
+  final double height;
+  final double horizontalPadding;
+  final double verticalPadding;
+  final double spacing;
+}
+
+class AppIconData {
+  const AppIconData({
+    this.assetPath,
+    required this.label,
+    this.iconData,
+    this.iconColor,
+    this.backgroundColor,
+  }) : assert(assetPath != null || iconData != null,
+            'Either assetPath or iconData must be provided');
+
+  final String? assetPath;
   final String label;
+  final IconData? iconData;
+  final Color? iconColor;
+  final Color? backgroundColor;
 }
 
 class AppleIconTile extends StatefulWidget {
@@ -862,23 +1109,22 @@ class AppleIconBody extends StatelessWidget {
     required this.icon,
     required this.size,
     required this.isHighlighted,
+    this.showLabel = true,
   });
 
   final AppIconData icon;
   final double size;
   final bool isHighlighted;
+  final bool showLabel;
 
   @override
   Widget build(BuildContext context) {
     final double radius = size * 0.225; // iPhone 标准圆角比例
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        AnimatedContainer(
+    final Widget iconContent = AnimatedContainer(
           duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.all(6), // 减小内边距
+          padding: const EdgeInsets.all(4), // 更紧凑的内容
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: icon.backgroundColor ?? Colors.white,
             borderRadius: BorderRadius.circular(radius),
             boxShadow: [
               BoxShadow(
@@ -896,17 +1142,30 @@ class AppleIconBody extends StatelessWidget {
             child: AspectRatio(
               aspectRatio: 1,
               child: Container(
-                color: Colors.white,
+                color: icon.backgroundColor ?? Colors.white,
                 alignment: Alignment.center,
-                child: Image.asset(
-                  icon.assetPath,
-                  fit: BoxFit.contain,
-                ),
+                child: icon.assetPath != null
+                    ? Image.asset(
+                        icon.assetPath!,
+                        fit: BoxFit.contain,
+                      )
+                    : Icon(
+                        icon.iconData,
+                        color: icon.iconColor ?? Colors.white,
+                        size: size * 0.5,
+                      ),
               ),
             ),
           ),
-        ),
-        const SizedBox(height: 8),
+        );
+    if (!showLabel) {
+      return iconContent;
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        iconContent,
+        const SizedBox(height: 4),
         Text(
           icon.label,
           textAlign: TextAlign.center,
@@ -914,7 +1173,7 @@ class AppleIconBody extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
             color: Colors.white,
-            fontSize: 12,
+            fontSize: 10,
             fontWeight: FontWeight.w600,
             shadows: [
               Shadow(
@@ -926,44 +1185,6 @@ class AppleIconBody extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _DropPlaceholder extends StatelessWidget {
-  const _DropPlaceholder({
-    required this.size,
-    required this.isActive,
-    required this.isVisible,
-  });
-
-  final double size;
-  final bool isActive;
-  final bool isVisible;
-
-  @override
-  Widget build(BuildContext context) {
-    if (!isVisible) {
-      return const SizedBox.shrink();
-    }
-
-    final double radius = size * 0.225; // iPhone 标准圆角比例
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 150),
-      opacity: isActive ? 1 : 0.75,
-      child: SizedBox(
-        height: size,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(radius),
-            border: Border.all(
-              color: Colors.white.withOpacity(isActive ? 0.8 : 0.4),
-              width: 2,
-            ),
-            color: Colors.white.withOpacity(0.08),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -1090,45 +1311,27 @@ class _AnimatedGridItem extends StatelessWidget {
 }
 
 class _IconSquare extends StatelessWidget {
-  const _IconSquare({required this.icon, required this.size, required this.isHighlighted});
+  const _IconSquare({
+    required this.icon,
+    required this.size,
+    required this.isHighlighted,
+    this.showLabel = false,
+  });
 
   final AppIconData icon;
   final double size;
   final bool isHighlighted;
+  final bool showLabel;
 
   @override
   Widget build(BuildContext context) {
-    final double radius = size * 0.225; // iPhone 标准圆角比例
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      padding: const EdgeInsets.all(6), // 减小内边距
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(radius),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.18),
-            blurRadius: 18,
-            offset: const Offset(0, 10),
-          ),
-        ],
-        border: isHighlighted ? Border.all(color: Colors.white.withOpacity(0.7), width: 2) : null,
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius),
-        child: AspectRatio(
-          aspectRatio: 1,
-          child: Container(
-            color: Colors.white,
-            alignment: Alignment.center,
-            child: Image.asset(
-              icon.assetPath,
-              fit: BoxFit.contain,
-            ),
-          ),
-        ),
-      ),
+    final Widget content = AppleIconBody(
+      icon: icon,
+      size: size,
+      isHighlighted: isHighlighted,
+      showLabel: showLabel,
     );
+    return content;
   }
 }
 
@@ -1164,6 +1367,7 @@ class _DockIconTile extends StatefulWidget {
     required this.onDelete,
     required this.onDragStart,
     required this.onDragEnd,
+    required this.onDragUpdate,
   });
 
   final AppIconData icon;
@@ -1172,6 +1376,7 @@ class _DockIconTile extends StatefulWidget {
   final VoidCallback onDelete;
   final VoidCallback onDragStart;
   final Function(DraggableDetails) onDragEnd;
+  final ValueChanged<DragUpdateDetails> onDragUpdate;
 
   @override
   State<_DockIconTile> createState() => _DockIconTileState();
@@ -1243,6 +1448,9 @@ class _DockIconTileState extends State<_DockIconTile>
 
   @override
   Widget build(BuildContext context) {
+    final double visualSize = widget.size * 0.88;
+    final double offset = (widget.size - visualSize) / 2;
+
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
@@ -1258,28 +1466,41 @@ class _DockIconTileState extends State<_DockIconTile>
         feedback: SizedBox(
           width: widget.size,
           height: widget.size,
-          child: _IconSquare(icon: widget.icon, size: widget.size, isHighlighted: true),
+          child: _IconSquare(
+            icon: widget.icon,
+            size: widget.size,
+            isHighlighted: true,
+            showLabel: false,
+          ),
         ),
         onDragStarted: widget.onDragStart,
         onDragEnd: widget.onDragEnd,
+        onDragUpdate: widget.onDragUpdate,
         childWhenDragging: const SizedBox.shrink(),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            _IconSquare(icon: widget.icon, size: widget.size, isHighlighted: false),
-            Positioned(
-              top: -10,
-              left: -10,
-              child: IgnorePointer(
-                ignoring: !widget.isEditing,
-                child: AnimatedOpacity(
-                  duration: const Duration(milliseconds: 150),
-                  opacity: widget.isEditing ? 1 : 0,
-                  child: _DeleteButton(onPressed: widget.onDelete),
+        child: SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Align(
+                alignment: Alignment.center,
+                child: _IconSquare(icon: widget.icon, size: widget.size, isHighlighted: false),
+              ),
+              Positioned(
+                top: -10,
+                left: -10,
+                child: IgnorePointer(
+                  ignoring: !widget.isEditing,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 150),
+                    opacity: widget.isEditing ? 1 : 0,
+                    child: _DeleteButton(onPressed: widget.onDelete),
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
