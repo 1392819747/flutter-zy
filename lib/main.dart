@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
 
 void main() {
   runApp(const AppleIconSortApp());
@@ -36,7 +37,12 @@ class AppleIconSortPage extends StatefulWidget {
 class _AppleIconSortPageState extends State<AppleIconSortPage> {
   static const double _gridSpacing = 18; // 缩小行间距，在保持图标大小的同时容纳更多行
   static const double _iconVisualScale = 0.88; // 控制图标相对于单元格的大小
+  List<_HomeWidgetType> _homeWidgetOrder = [
+    _HomeWidgetType.weather,
+    _HomeWidgetType.clock,
+  ];
   static const int _iconsPerPage = 24; // 每页最多24个图标 (4x6) - 保持原数量
+  static const int _dockCapacity = 4;
 
   late List<List<AppIconData>> _pages = _initializePages();
 
@@ -110,13 +116,20 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   bool _isEditing = false;
   AppIconData? _draggingIcon;
   int? _dragStartIndex;
+  int? _dragStartPage;
   int? _hoverSlot;
   int? _hoverDockSlot;
   final GlobalKey _dockKey = GlobalKey();
   _DockDimensions? _latestDockDimensions;
+  double _dockVisualStart = 0;
+  int _dockVisualCount = 0;
+  double _dockSlotWidth = 0;
+  int _dockMaxSlotIndex = 1;
   double _cachedStatusBarHeight = 0;
   bool _dragFromDock = false;
   int _currentPage = 0;
+  int? _dockDragOriginalIndex;
+  int _lastLayoutColumns = 4;
   final PageController _pageController = PageController();
   Timer? _autoScrollTimer;
   int? _pendingAutoScrollPage;
@@ -149,6 +162,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _isEditing = true;
       _draggingIcon = icon;
       _dragStartIndex = index;
+      _dragStartPage = _currentPage;
       _hoverSlot = index;
       _cachedStatusBarHeight = MediaQuery.of(context).viewPadding.top;
       _dragFromDock = false;
@@ -165,6 +179,8 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       _isEditing = true;
       _draggingIcon = icon;
       _dragStartIndex = slot;
+      _dragStartPage = null;
+      _dockDragOriginalIndex = slot;
       _hoverSlot = null;
       _hoverDockSlot = slot;
       _cachedStatusBarHeight = MediaQuery.of(context).viewPadding.top;
@@ -182,10 +198,13 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
         final AppIconData icon = _draggingIcon!;
         if (_dragFromDock) {
           final int currentIndex = _dockIcons.indexOf(icon);
-          if (currentIndex != -1) {
-            final AppIconData item = _dockIcons.removeAt(currentIndex);
-            final int restoredIndex = math.max(0, math.min(_dragStartIndex!, _dockIcons.length));
-            _dockIcons.insert(restoredIndex, item);
+          final int targetIndex = (_dockDragOriginalIndex ?? currentIndex).clamp(
+            0,
+            math.max(0, _dockIcons.length - 1),
+          );
+          if (currentIndex != -1 && currentIndex != targetIndex) {
+            _dockIcons.removeAt(currentIndex);
+            _dockIcons.insert(targetIndex, icon);
           }
         } else {
           // 查找图标在当前页面中的位置并恢复
@@ -197,8 +216,23 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
           }
         }
       }
+      if (_dragFromDock && _draggingIcon != null) {
+        final AppIconData icon = _draggingIcon!;
+        final bool existsInDock = _dockIcons.contains(icon);
+        final bool existsInPages =
+            _pages.any((page) => page.contains(icon));
+        if (!existsInDock && !existsInPages) {
+          final int restoreIndex = math.max(
+            0,
+            math.min(_dockDragOriginalIndex ?? _dockIcons.length, _dockIcons.length),
+          );
+          _dockIcons.insert(restoreIndex, icon);
+        }
+      }
       _draggingIcon = null;
       _dragStartIndex = null;
+      _dragStartPage = null;
+      _dockDragOriginalIndex = null;
       _hoverSlot = null;
       _hoverDockSlot = null;
       _dragFromDock = false;
@@ -359,31 +393,9 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
     });
   }
 
-  void _checkAndCreatePageIfNeeded() {
-    // 如果当前页面满了，自动创建新页面
-    if (_currentIcons.length > _iconsPerPage) {
-      // 创建新页面
-      final List<AppIconData> overflowIcons = _pages[_currentPage].sublist(_iconsPerPage);
-      _pages[_currentPage] = _pages[_currentPage].sublist(0, _iconsPerPage);
-
-      // 如果还有下一页，将溢出的图标添加到下一页
-      if (_currentPage + 1 < _pages.length) {
-        _pages[_currentPage + 1].insertAll(0, overflowIcons);
-      } else {
-        // 创建新的页面
-        _pages.add(overflowIcons);
-      }
-
-      // 切换到新的页面
-      if (_currentPage + 1 < _pages.length) {
-        _currentPage++;
-        _pageController.animateToPage(
-          _currentPage,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-        );
-      }
-    }
+  void _checkAndCreatePageIfNeeded([int? pageIndex]) {
+    final int page = pageIndex ?? _currentPage;
+    _rebalancePage(page, _lastLayoutColumns);
   }
 
   void _handleDropAccepted(AppIconData icon, int slot) {
@@ -397,28 +409,51 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
         final int insertIndex = math.min(slot, _currentIcons.length);
         _pages[_currentPage].insert(insertIndex, icon);
         _hoverSlot = insertIndex;
-        _checkAndCreatePageIfNeeded();
+        _rebalancePage(_currentPage, _lastLayoutColumns);
       } else {
         _hoverSlot = slot;
       }
       _hoverDockSlot = null;
+      _dockDragOriginalIndex = null;
     });
   }
 
   void _handleDockDrop(AppIconData icon, int slot) {
     setState(() {
-      for (final page in _pages) {
-        page.remove(icon);
+      if (_dragFromDock && identical(icon, _draggingIcon)) {
+        _dockIcons.remove(icon);
+        final int insertIndex = slot.clamp(0, _dockCapacity - 1).clamp(0, _dockIcons.length);
+        _dockIcons.insert(insertIndex, icon);
+      } else {
+        for (final page in _pages) {
+          page.remove(icon);
+        }
+        final bool removedExisting = _dockIcons.remove(icon);
+        final bool dockFull = _dockIcons.length >= _dockCapacity;
+        final int clampedSlot =
+            slot.clamp(0, dockFull ? _dockCapacity - 1 : _dockIcons.length);
+
+        if (!removedExisting && dockFull) {
+          final AppIconData removed = _dockIcons[clampedSlot];
+          _dockIcons[clampedSlot] = icon;
+          final int targetPage = (_dragStartPage != null &&
+                  _dragStartPage! >= 0 &&
+                  _dragStartPage! < _pages.length)
+              ? _dragStartPage!
+              : _currentPage;
+          final int insertIndex = math.min(
+            _dragStartIndex ?? _pages[targetPage].length,
+            _pages[targetPage].length,
+          );
+          _pages[targetPage].insert(insertIndex, removed);
+          _checkAndCreatePageIfNeeded(targetPage);
+        } else {
+          final int insertIndex = math.min(clampedSlot, _dockIcons.length);
+          _dockIcons.insert(insertIndex, icon);
+        }
       }
-      final bool alreadyInDock = _dockIcons.contains(icon);
-      if (!alreadyInDock && _dockIcons.length >= 4) {
-        _hoverDockSlot = null;
-        return;
-      }
-      _dockIcons.remove(icon);
-      final int insertIndex = math.min(slot, _dockIcons.length);
-      _dockIcons.insert(insertIndex, icon);
       _hoverDockSlot = null;
+      _dockDragOriginalIndex = null;
     });
   }
 
@@ -466,7 +501,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
             width: itemWidth,
             child: Center(
               child: AppleIconTile(
-                key: ValueKey(icon.label),
+                key: ValueKey(icon),
                 icon: icon,
                 isActive: isDragging,
                 isEditing: _isEditing,
@@ -482,19 +517,25 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   }
 
   Widget _buildTrailingDropTarget(double itemWidth) {
-    final bool isActive = _hoverSlot == _currentIcons.length && _draggingIcon != null;
-    final double tileSize = itemWidth * _iconVisualScale;
+    return _buildEmptyGridSlot(_currentIcons.length, itemWidth);
+  }
+
+  Widget _buildEmptyGridSlot(int slot, double itemWidth) {
     return SizedBox(
       width: itemWidth,
       child: DragTarget<AppIconData>(
         onWillAccept: (data) => data != null,
         onMove: (details) {
           if (details.data != null) {
-            _updateDragPosition(details.data, _currentIcons.length);
+            _updateDragPosition(details.data, slot);
+          } else if (_hoverSlot != slot) {
+            setState(() {
+              _hoverSlot = slot;
+            });
           }
         },
         onLeave: (_) {
-          if (_hoverSlot == _currentIcons.length && _draggingIcon != null) {
+          if (_hoverSlot == slot && _draggingIcon != null) {
             setState(() {
               _hoverSlot = null;
             });
@@ -502,18 +543,18 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
         },
         onAccept: (data) {
           if (data != null) {
-            _handleDropAccepted(data, _currentIcons.length);
+            _handleDropAccepted(data, slot);
           }
         },
         builder: (context, candidateData, rejectedData) {
-          return SizedBox(height: itemWidth);
+          return const SizedBox.expand();
         },
       ),
     );
   }
 
   _DockDimensions _calculateDockDimensions(BuildContext context) {
-    const int columns = 4;
+    const int columns = _dockCapacity;
     const double horizontalPadding = 18;
     const double verticalPadding = 20;
     const double spacing = _gridSpacing;
@@ -539,79 +580,117 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
   }
 
   Widget _buildDock(BuildContext context, _DockDimensions dims) {
-    return Container(
+    return LiquidGlass(
       key: _dockKey,
-      padding: EdgeInsets.symmetric(
-        horizontal: dims.horizontalPadding,
-        vertical: dims.verticalPadding * 0.5,
+      shape: LiquidRoundedSuperellipse(borderRadius: const Radius.circular(34)),
+      settings: LiquidGlassSettings.figma(
+        refraction: 35,
+        depth: 16,
+        dispersion: 8,
+        frost: 20,
+        lightIntensity: 70,
+        blend: 30,
+        glassColor: Colors.white.withOpacity(0.18),
       ),
-      height: dims.height,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(34),
-        border: Border.all(color: Colors.white.withOpacity(0.25), width: 1.5),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 30),
-        ],
-      ),
-      alignment: Alignment.center,
-      child: SizedBox(
-        width: dims.contentWidth,
-        height: dims.itemSize,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            for (int i = 0; i < 4; i++)
-              Positioned(
-                left: i * (dims.itemSize + dims.spacing),
-                top: 0,
-                width: dims.itemSize,
-                height: dims.itemSize,
-                child: DragTarget<AppIconData>(
-                  onWillAccept: (data) {
-                    if (data == null) return false;
-                    if (_dockIcons.length >= 4 && !_dockIcons.contains(data)) {
-                      return false;
-                    }
-                    return true;
-                  },
-                  onAccept: (data) {
-                    _handleDockDrop(data, i);
-                  },
-                  builder: (context, candidateData, rejectedData) {
-                    return const SizedBox.shrink();
-                  },
-                ),
+      child: DragTarget<AppIconData>(
+        onWillAccept: (data) => data != null,
+        onAccept: (data) {
+          final int maxSlot = math.max(1, _dockMaxSlotIndex);
+          final int fallbackSlot = (_hoverDockSlot ?? math.min(_dockIcons.length, maxSlot - 1))
+              .clamp(0, maxSlot - 1);
+          _handleDockDrop(data, fallbackSlot);
+        },
+        builder: (context, candidateData, rejectedData) {
+          return Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: dims.horizontalPadding,
+              vertical: dims.verticalPadding * 0.5,
+            ),
+            height: dims.height,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(34),
+              border: Border.all(color: Colors.white.withOpacity(0.25), width: 1),
+            ),
+            alignment: Alignment.center,
+            child: SizedBox(
+              width: dims.contentWidth,
+              height: dims.itemSize,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: _buildDockIconWidgets(dims),
               ),
-            ..._buildDockIconWidgets(dims),
-          ],
-        ),
+            ),
+          );
+        },
       ),
     );
   }
 
   List<Widget> _buildDockIconWidgets(_DockDimensions dims) {
+    const int capacity = _dockCapacity;
     final List<Widget> widgets = [];
-    final bool draggingDockIcon =
-        _dragFromDock && _draggingIcon != null && _dockIcons.contains(_draggingIcon);
+    final bool draggingDockIcon = _dragFromDock && _draggingIcon != null;
+    final List<AppIconData> remainingIcons = List.of(_dockIcons);
 
-    final List<AppIconData> iconsToRender = [
-      for (final icon in _dockIcons)
-        if (!(draggingDockIcon && identical(icon, _draggingIcon))) icon,
-    ];
+    if (draggingDockIcon && _draggingIcon != null) {
+      remainingIcons.remove(_draggingIcon);
+    }
 
-    final int count = iconsToRender.length;
+    final bool showPlaceholder = draggingDockIcon || _hoverDockSlot != null;
+    int placeholderSlot = -1;
+    if (showPlaceholder) {
+      if (_hoverDockSlot != null) {
+        placeholderSlot = _hoverDockSlot!.clamp(0, capacity - 1);
+      } else if (draggingDockIcon) {
+        placeholderSlot = (_dockDragOriginalIndex ?? remainingIcons.length);
+      } else {
+        placeholderSlot = remainingIcons.length;
+      }
+      placeholderSlot = placeholderSlot.clamp(0, capacity - 1);
+    }
+
+    final int layoutSlots = showPlaceholder
+        ? math.min(capacity, remainingIcons.length + 1)
+        : math.max(1, math.min(capacity, math.max(1, remainingIcons.length)));
+    final int dropSlots = math.min(capacity, _dockIcons.length + 1);
+
+    final List<AppIconData?> slotIcons = List<AppIconData?>.filled(layoutSlots, null);
+    int iconCursor = 0;
+    for (int slot = 0; slot < layoutSlots; slot++) {
+      if (showPlaceholder && slot == placeholderSlot) {
+        continue;
+      }
+      if (iconCursor < remainingIcons.length) {
+        slotIcons[slot] = remainingIcons[iconCursor++];
+      }
+    }
+
+    final double slotWidth = dims.itemSize + dims.spacing;
     final double usedWidth =
-        count * dims.itemSize + math.max(0, count - 1) * dims.spacing;
+        layoutSlots * dims.itemSize + math.max(0, layoutSlots - 1) * dims.spacing;
     final double start = math.max(0, (dims.contentWidth - usedWidth) / 2);
 
-    for (int displayIndex = 0; displayIndex < count; displayIndex++) {
-      final AppIconData icon = iconsToRender[displayIndex];
-      final int iconIndex = _dockIcons.indexOf(icon);
-      final double left = start + displayIndex * (dims.itemSize + dims.spacing);
+    _dockVisualCount = layoutSlots;
+    _dockVisualStart = start;
+    _dockSlotWidth = slotWidth;
+    _dockMaxSlotIndex = showPlaceholder ? layoutSlots : dropSlots;
+
+    for (int slot = 0; slot < layoutSlots; slot++) {
+      final AppIconData? icon = slotIcons[slot];
+      final double left = start + slot * slotWidth;
+      if (icon == null) {
+        widgets.add(Positioned(
+          left: left,
+          top: 0,
+          width: dims.itemSize,
+          height: dims.itemSize,
+          child: const SizedBox.shrink(),
+        ));
+        continue;
+      }
       widgets.add(
         AnimatedPositioned(
-          key: ValueKey(icon.label),
+          key: ValueKey(icon),
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           left: left,
@@ -627,7 +706,7 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                 isEditing: _isEditing,
                 size: dims.itemSize * _iconVisualScale,
                 onDelete: () => _handleDeleteDock(icon),
-                onDragStart: () => _handleDockDragStart(context, iconIndex),
+                onDragStart: () => _handleDockDragStart(context, _dockIcons.indexOf(icon)),
                 onDragEnd: (details) => _handleDragEnd(wasAccepted: details.wasAccepted),
                 onDragUpdate: _handleDragUpdate,
               ),
@@ -677,6 +756,22 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
     _handleDockHover(details.globalPosition);
   }
 
+  void _handleWidgetReorder(_HomeWidgetType data, int index) {
+    setState(() {
+      final currentIndex = _homeWidgetOrder.indexOf(data);
+      if (currentIndex != -1 && currentIndex != index) {
+        _homeWidgetOrder.removeAt(currentIndex);
+        _homeWidgetOrder.insert(index, data);
+      }
+    });
+  }
+
+  void _handleWidgetDelete(_HomeWidgetType widgetType) {
+    setState(() {
+      _homeWidgetOrder.remove(widgetType);
+    });
+  }
+
   void _scheduleAutoScroll(int targetPage) {
     if (_pendingAutoScrollPage == targetPage &&
         _autoScrollTimer?.isActive == true) {
@@ -712,7 +807,10 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       return;
     }
     final Offset local = dockBox.globalToLocal(globalPosition);
-    const double verticalTolerance = 36;
+    double verticalTolerance = 36;
+    if (_dragFromDock && local.dy < 0) {
+      verticalTolerance = 0;
+    }
     final bool insideX = local.dx >= 0 && local.dx <= dockBox.size.width;
     final bool insideY =
         local.dy >= -verticalTolerance && local.dy <= dockBox.size.height + verticalTolerance;
@@ -726,9 +824,11 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       return;
     }
 
-    final double slotWidth = dims.itemSize + dims.spacing;
-    int slot = (local.dx / slotWidth).floor();
-    slot = math.max(0, math.min(3, slot));
+    final double slotWidth = _dockSlotWidth == 0 ? dims.itemSize + dims.spacing : _dockSlotWidth;
+    double relative = local.dx - _dockVisualStart;
+    int slot = relative <= 0 ? 0 : (relative / slotWidth).floor();
+    final int maxSlot = math.max(1, _dockMaxSlotIndex);
+    slot = slot.clamp(0, maxSlot - 1);
 
     if (_hoverDockSlot != slot) {
       setState(() {
@@ -736,6 +836,42 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
       });
     }
   }
+
+  List<_HomeWidgetType> _homeWidgetsForPage(int pageIndex, int columns) {
+    if (_homeWidgetOrder.isEmpty) {
+      return const [];
+    }
+    if (columns >= 4) {
+      return pageIndex == 0 ? _homeWidgetOrder : const [];
+    }
+    if (pageIndex < _homeWidgetOrder.length) {
+      return <_HomeWidgetType>[_homeWidgetOrder[pageIndex]];
+    }
+    return const [];
+  }
+
+  int _reservedSlotsForPage(int pageIndex, int columns) {
+    return _homeWidgetsForPage(pageIndex, columns).length * 4;
+  }
+
+  void _rebalancePage(int pageIndex, int columns) {
+    if (pageIndex < 0 || pageIndex >= _pages.length) {
+      return;
+    }
+    final int capacity = math.max(0, _iconsPerPage - _reservedSlotsForPage(pageIndex, columns));
+    if (_pages[pageIndex].length <= capacity) {
+      return;
+    }
+    final List<AppIconData> overflow =
+        _pages[pageIndex].sublist(capacity, _pages[pageIndex].length);
+    _pages[pageIndex] = _pages[pageIndex].sublist(0, capacity);
+    if (pageIndex + 1 >= _pages.length) {
+      _pages.add([]);
+    }
+    _pages[pageIndex + 1].insertAll(0, overflow);
+    _rebalancePage(pageIndex + 1, columns);
+  }
+
 
   @override
   void dispose() {
@@ -823,11 +959,12 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                       itemCount: math.max(2, _pages.length), // 使用实际的分页数量，至少2页
                       itemBuilder: (context, pageIndex) {
                         return Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8), // iPhone 标准边距
                           child: LayoutBuilder(
                             builder: (context, constraints) {
                               final double width = constraints.maxWidth;
                               final int columns = _columnCountForWidth(width);
+                              _lastLayoutColumns = columns;
                               final double itemWidth =
                                   (width - _gridSpacing * (columns - 1)) / columns;
 
@@ -837,57 +974,96 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
                                   (constraints.maxHeight - (_gridSpacing * (targetRows - 1))) /
                                       targetRows;
                               cellHeight = math.min(cellHeight, maxHeightForRows);
-                              // 获取当前页面的图标
+                              final bool isCurrentPage = pageIndex == _currentPage;
+                              final widgetsForPage =
+                                  _homeWidgetsForPage(pageIndex, columns);
+                              final int reservedSlots =
+                                  _reservedSlotsForPage(pageIndex, columns);
+                              final int pageCapacity = math.max(
+                                0,
+                                _iconsPerPage - reservedSlots,
+                              );
                               final List<AppIconData> pageIcons = pageIndex < _pages.length
                                   ? _pages[pageIndex]
                                   : [];
-                              final bool isCurrentPage = pageIndex == _currentPage;
 
-                              return Stack(
-                                clipBehavior: Clip.none,
+                              if (isCurrentPage && pageIcons.length > pageCapacity) {
+                                WidgetsBinding.instance.addPostFrameCallback((_) {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    _rebalancePage(pageIndex, columns);
+                                  });
+                                });
+                              }
+
+                              final List<AppIconData> displayIcons = pageIcons.length > pageCapacity
+                                  ? pageIcons.take(pageCapacity).toList()
+                                  : pageIcons;
+                              final int totalSlots = pageCapacity;
+                              return Column(
                                 children: [
-                                  for (int i = 0; i < pageIcons.length; i++)
-                                    _AnimatedGridItem(
-                                      key: ValueKey('${pageIndex}_${pageIcons[i].label}'),
-                                      index: i,
-                                      columns: columns,
-                                      spacing: _gridSpacing,
-                                      itemWidth: itemWidth,
-                                      itemHeight: cellHeight,
-                                      child: isCurrentPage
-                                          ? _buildDraggableIcon(
-                                              index: i,
-                                              itemWidth: itemWidth,
-                                            )
-                                          : IgnorePointer(
-                                              child: SizedBox(
-                                                width: itemWidth,
-                                                child: Center(
-                                                  child: AppleIconTile(
-                                                    key: ValueKey('static_${pageIndex}_${pageIcons[i].label}'),
-                                                    icon: pageIcons[i],
-                                                    isEditing: _isEditing,
-                                                    onDelete: () {},
-                                                    size: itemWidth * _iconVisualScale,
-                                                    isActive: false,
-                                                    isHighlighted: false,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
+                                  if (widgetsForPage.isNotEmpty)
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 12), // iPhone 标准间距
+                                      child: _HomeWidgetArea(
+                                        key: ValueKey(widgetsForPage.map((e) => e.toString()).join('-')),
+                                        widgets: widgetsForPage,
+                                        itemWidth: itemWidth,
+                                        cellHeight: cellHeight,
+                                        spacing: _gridSpacing,
+                                        isEditing: _isEditing,
+                                        onWidgetReorder: _handleWidgetReorder,
+                                        onDelete: _handleWidgetDelete,
+                                      ),
                                     ),
-                                  if (isCurrentPage &&
-                                      _draggingIcon != null &&
-                                      pageIcons.length < _iconsPerPage)
-                                    _AnimatedGridItem(
-                                      key: const ValueKey('trailing_drop'),
-                                      index: pageIcons.length,
-                                      columns: columns,
-                                      spacing: _gridSpacing,
-                                      itemWidth: itemWidth,
-                                      itemHeight: cellHeight,
-                                      child: _buildTrailingDropTarget(itemWidth),
+                                  Expanded(
+                                    child: Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        for (int i = 0; i < totalSlots; i++)
+                                          _AnimatedGridItem(
+                                            key: ValueKey(
+                                                '${pageIndex}_slot_$i'),
+                                            index: i,
+                                            columns: columns,
+                                            spacing: _gridSpacing,
+                                            itemWidth: itemWidth,
+                                            itemHeight: cellHeight,
+                                            child: i < displayIcons.length
+                                                ? (isCurrentPage
+                                                    ? _buildDraggableIcon(
+                                                        index: i,
+                                                        itemWidth: itemWidth,
+                                                      )
+                                                    : IgnorePointer(
+                                                        child: SizedBox(
+                                                          width: itemWidth,
+                                                          child: Center(
+                                                            child: AppleIconTile(
+                                                              key: ValueKey(
+                                                                  displayIcons[i]),
+                                                              icon: displayIcons[i],
+                                                              isEditing:
+                                                                  _isEditing,
+                                                              onDelete: () {},
+                                                              size: itemWidth *
+                                                                  _iconVisualScale,
+                                                              isActive: false,
+                                                              isHighlighted:
+                                                                  false,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ))
+                                                : (isCurrentPage
+                                                    ? _buildEmptyGridSlot(
+                                                        i, itemWidth)
+                                                    : const SizedBox.shrink()),
+                                          ),
+                                      ],
                                     ),
+                                  ),
                                 ],
                               );
                             },
@@ -905,17 +1081,21 @@ class _AppleIconSortPageState extends State<AppleIconSortPage> {
               right: 0,
               bottom: 28 + dockDimensions.height,
               child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: Colors.white.withOpacity(0.25), width: 1),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withOpacity(0.18), blurRadius: 10),
-                    ],
+                child: LiquidGlass(
+                  shape: LiquidRoundedSuperellipse(borderRadius: const Radius.circular(999)),
+                  settings: LiquidGlassSettings.figma(
+                    refraction: 10,
+                    depth: 8,
+                    dispersion: 4,
+                    frost: 12,
+                    lightIntensity: 60,
+                    blend: 15,
+                    glassColor: Colors.white.withOpacity(0.18),
                   ),
-                  child: _buildPageIndicator(),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    child: _buildPageIndicator(),
+                  ),
                 ),
               ),
             ),
@@ -959,6 +1139,345 @@ class _DockDimensions {
   final double verticalPadding;
   final double spacing;
 }
+
+class _HomeWidgetArea extends StatelessWidget {
+  const _HomeWidgetArea({
+    Key? key,
+    required this.widgets,
+    required this.itemWidth,
+    required this.cellHeight,
+    required this.spacing,
+    required this.isEditing,
+    required this.onWidgetReorder,
+    required this.onDelete,
+  }) : super(key: key);
+
+  final List<_HomeWidgetType> widgets;
+  final double itemWidth;
+  final double cellHeight;
+  final double spacing;
+  final bool isEditing;
+  final Function(_HomeWidgetType, int) onWidgetReorder;
+  final Function(_HomeWidgetType) onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // iPhone 桌面标准：2x2 小组件 = 2个图标宽度 + 1个间距
+        final double widgetWidth = itemWidth * 2 + spacing;
+        final double widgetHeight = cellHeight * 2 + spacing;
+        Widget buildCard(_HomeWidgetType type) {
+          return SizedBox(
+            width: widgetWidth,
+            height: widgetHeight, // 2x2 小组件高度应该是两个单元格高度加上间距
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: _HomeWidgetCard(type: type, isEditing: isEditing, onDelete: () => onDelete(type)),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _widgetTitle(type),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black54,
+                        offset: Offset(0, 1),
+                        blurRadius: 5,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        final List<Widget> cards = widgets.asMap().entries.map((entry) {
+          final int index = entry.key;
+          final _HomeWidgetType type = entry.value;
+          return Padding(
+            padding: EdgeInsets.only(right: index < widgets.length - 1 ? spacing : 0),
+            child: DragTarget<_HomeWidgetType>(
+              onWillAccept: (data) => data != null && data != type,
+              onAccept: (data) {
+                onWidgetReorder(data, index);
+              },
+              builder: (context, candidateData, rejectedData) {
+                return LongPressDraggable<_HomeWidgetType>(
+                  data: type,
+                  dragAnchorStrategy: pointerDragAnchorStrategy,
+                  feedback: SizedBox(
+                    width: widgetWidth,
+                    height: widgetHeight,
+                    child: Material(
+                        color: Colors.transparent,
+                        child: _HomeWidgetCard(type: type, isEditing: isEditing, onDelete: () => onDelete(type)),
+                      ),
+                  ),
+                  onDragStarted: () {
+                    // Handle drag start
+                  },
+                  onDragUpdate: (details) {
+                    // Handle drag update
+                  },
+                  onDragEnd: (details) {
+                    // Handle drag end
+                  },
+                  child: buildCard(type),
+                );
+              },
+            ),
+          );
+        }).toList();
+
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: cards,
+        );
+      },
+    );
+  }
+
+  String _widgetTitle(_HomeWidgetType type) {
+    switch (type) {
+      case _HomeWidgetType.weather:
+        return '天气';
+      case _HomeWidgetType.clock:
+        return '时间';
+    }
+  }
+}
+
+class _HomeWidgetCard extends StatelessWidget {
+  const _HomeWidgetCard({
+    required this.type,
+    required this.isEditing,
+    this.onDelete,
+  });
+
+  final _HomeWidgetType type;
+  final bool isEditing;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    switch (type) {
+      case _HomeWidgetType.weather:
+        return _WeatherWidget(
+          isEditing: isEditing,
+          onDelete: onDelete,
+        );
+      case _HomeWidgetType.clock:
+        return _ClockWidget(
+          isEditing: isEditing,
+          onDelete: onDelete,
+        );
+    }
+  }
+}
+
+class _WeatherWidget extends StatelessWidget {
+  const _WeatherWidget({
+    required this.isEditing,
+    this.onDelete,
+  });
+
+  final bool isEditing;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return _HomeWidgetFrame(
+      isEditing: isEditing,
+      gradient: const LinearGradient(
+        colors: [Color(0xFF1A1A2E), Color(0xFF16213E)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      onDelete: onDelete,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text(
+            '天气',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Text(
+                    '上海',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    '26°',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 30,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    '多云 · 体感 27°',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+              const Text(
+                '⛅',
+                style: TextStyle(
+                  fontSize: 50,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ClockWidget extends StatelessWidget {
+  const _ClockWidget({
+    required this.isEditing,
+    this.onDelete,
+  });
+
+  final bool isEditing;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final DateTime now = DateTime.now();
+    final String time = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final String date = '${now.month}月${now.day}日 · ${_weekdayLabel(now.weekday)}';
+    return _HomeWidgetFrame(
+      isEditing: isEditing,
+      gradient: const LinearGradient(
+        colors: [Color(0xFF0F3460), Color(0xFF16213E)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      onDelete: onDelete,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            time,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 40,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 2.0,
+            ),
+            softWrap: false,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            date,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+            softWrap: false,
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _weekdayLabel(int weekday) {
+    const labels = ['一', '二', '三', '四', '五', '六', '日'];
+    return '周${labels[(weekday - 1) % labels.length]}';
+  }
+}
+
+class _HomeWidgetFrame extends StatelessWidget {
+  const _HomeWidgetFrame({
+    required this.child,
+    required this.gradient,
+    required this.isEditing,
+    this.onDelete,
+  });
+
+  final Widget child;
+  final Gradient gradient;
+  final bool isEditing;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 100),
+          transform: Matrix4.rotationZ(isEditing ? 0.03 : 0.0),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              decoration: BoxDecoration(gradient: gradient),
+              padding: const EdgeInsets.all(12),
+              child: child,
+            ),
+          ),
+        ),
+        if (isEditing && onDelete != null)
+          Positioned(
+            top: -8,
+            right: -8,
+            child: GestureDetector(
+              onTap: onDelete,
+              child: Container(
+                width: 24,
+                height: 24,
+                decoration: const BoxDecoration(
+                  color: Colors.red,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.close,
+                  color: Colors.white,
+                  size: 16,
+                ),
+              ),
+            ),
+        ),
+      ],
+    );
+  }
+}
+
+enum _HomeWidgetType { weather, clock }
 
 class AppIconData {
   const AppIconData({

@@ -1,0 +1,23 @@
+# Drag + Dock Requirements Summary
+
+## Dock Interaction
+- Fixed 4-slot layout with placeholder for smooth animations.
+- Dragging within Dock should immediately remove the dragged icon from the list, show a placeholder, and reinsert on drop. If drop fails, return to original slot.
+- Dragging between desktop and Dock must keep data consistent:
+  * Desktop → Dock: insert at target slot. If full, replace slot and push displaced icon back to source page at original index.
+  * Dock → Desktop: remove from Dock and insert into current desktop slot. If no desktop slot accepts it, return to Dock.
+- Dock uses LiquidGlass background.
+
+## Desktop Grid
+- Each page has 24 slots; 2×2 widgets consume 4 slots.
+- Page 1 contains Weather + Clock widgets; if columns < 4, second widget moves to page 2.
+- Slot capacity calculations must drive drag/drop logic, auto overflow to next pages.
+
+## Widgets
+- Weather and Clock currently static; future goal is to support dragging 2×2 widgets like apps.
+
+## Implementation Approach
+- Introduce explicit slot model tracking occupancy (including reserved slots for widgets).
+- For Dock, maintain `_dockIcons`, `_dockHoverSlot`, `_dockOriginalIndex`, etc., and use AnimatedPositioned placeholders.
+- For desktop, ensure `_rebalancePage` enforces per-page capacity after any insert/remove.
+- Use LiquidGlass for Dock + page indicator, ensuring Impeller requirement is satisfied.
